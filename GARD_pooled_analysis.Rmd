@@ -21,6 +21,7 @@ library(gridExtra)
 library(ggstance)
 library(colorspace)
 library(tidyverse)
+library(dplyr)
 
 library(readxl)
 library(survival)
@@ -136,7 +137,6 @@ all.os <- rsi.all %>%
 ```
 
 
-
 # 1. Data Summary
 
 <!-- summary tables -->
@@ -150,7 +150,7 @@ km.lf <- survfit(Surv(Time,Event)~ Site, data = km.df)
 z<-summary(km.lf)$table
 row.names(z) <- sub("Site=","",row.names(z))
 row.names(z) <- recode(row.names(z), 
-                       breast='Breast',  breast_TN='Breast TN', endometrial='Endometrium',
+                       breast='Breast',  breast_TN='TNBC', endometrial='Endometrium',
                        HN='Head and Neck',lung='NSCLC')
 colnames(z)[c(1,4,7)] <- c('No. of patients','No. of events','Median follow-up')
 z<-z[,c(1,4)]
@@ -169,7 +169,7 @@ km.os <- survfit(Surv(Time_OS,Event_OS)~ Site, data = km.df)
 #  ------ event by data / site  -> No. of patients /	No. of events /	Median / References
 z<-summary(km.os)$table
 row.names(z) <- sub("Site=","",row.names(z))
-row.names(z) <- recode(row.names(z), breast='Breast', breast_TN = "Breast TN",
+row.names(z) <- recode(row.names(z), breast='Breast', breast_TN = "TNBC",
                        endometrial='Endometrium', glioma = 'Glioma',
                        HN='Head and Neck', lung='NSCLC',
                        pancreas='Pancreas')
@@ -196,6 +196,7 @@ s <- summary(km,times=t)
 s1<-s[c(10,2,3,4,5,6,15,16)]
 s2<-data.frame(s1)
 s3<- s2 %>%
+  mutate(across(c(surv,lower,upper), ~round(.x,3))) %>%
   mutate(strata=sub("Site=","",strata)) %>%
   rename(site=strata) %>%
   select(site,time,surv) %>%
@@ -204,10 +205,12 @@ s3<- s2 %>%
   pivot_wider(names_from = c(time,Xrt), values_from = c(surv))
 s3<-s3[,c(1,4,2,5,3)]
 s3<-s3 %>% mutate(site = recode(site, 
-                       breast='Breast', breast_TN='Breast TN',
+                       breast='Breast', breast_TN='TNBC',
                        endometrial='Endometrium',
                        HN='Head and Neck',lung='NSCLC')) %>%
-  rename(Site=site)
+  rename(Site=site) %>%
+  mutate(across(everything(), ~ ifelse(is.na(.x),"NA",.x)))
+
 
 print(xtable(s3,digits=3,type="latex"), comment = FALSE,include.rownames = F)
 ```
@@ -225,21 +228,109 @@ s <- summary(km,times=t)
 s1<-s[c(10,2,3,4,5,6,15,16)]
 s2<-data.frame(s1)
 s3<- s2 %>%
+  mutate(across(c(surv,lower,upper), ~round(.x,3))) %>%
   mutate(strata=sub("Site=","",strata)) %>%
   rename(site=strata) %>%
   select(site,time,surv) %>%
   separate(col = site,into = c('site','Xrt'), sep = ', ') %>%
   mutate(Xrt=if_else(Xrt=="Received_RT=0","-XRT","+XRT")) %>%
   pivot_wider(names_from = c(time,Xrt), values_from = c(surv)) %>%
-  mutate(site = recode(site, breast="Breast",breast_TN="Breast TN",
+  mutate(site = recode(site, breast="Breast",breast_TN="TNBC",
                        endometrial="Endometrium",glioma="Glioma",
                        lung="NSCLC",pancreas="Pancreas")) %>%
-  rename(Site=site)
+  rename(Site=site)%>%
+  mutate(across(everything(), ~ ifelse(is.na(.x),"NA",.x)))
 
 s3<-s3[,c(1,4,2,5,3)]
-print(xtable(s3,digits=3,type="latex"), comment = FALSE,include.rownames = FALSE)
+
+print(xtable(s3,type="latex"), comment = FALSE,include.rownames = FALSE)
 ```
 
+```{r, include=TRUE, results='asis'}
+
+km.df.all_source<-rsi.all %>%
+  # select(!c(Source,d,n,TD,alpha,Event_Type)) %>%
+  select(!c(d,n,TD,alpha)) %>%
+  add_column(.before = 1, idx = 1:dim(rsi.all)[1]) %>%
+  unite("Time_Event_OS",Event_OS,Time_OS,remove = TRUE) %>%
+  unite("Time_Event",Event,Time,remove = TRUE) %>%
+  pivot_longer(cols = c(Time_Event,Time_Event_OS),names_to = "newcol",values_to = "Time_Event") %>%
+  mutate(Outcome = if_else(newcol=="Time_Event","Recurrence","Survival")) %>%
+  filter(Time_Event != "NA_NA") %>%
+  separate(Time_Event, c("Event","Time"), sep = "_") %>%
+  select(!newcol) %>%
+  mutate(Site = recode(Site, breast="Breast",
+                       breast_TN="TNBC",
+                       endometrial="Endometrium",glioma="Glioma",
+                       lung="NSCLC",pancreas="Pancreas",HN="Head and Neck",
+                       esophagus='Esophagus', rectal = 'Rectal')) %>%
+  mutate(Time = as.numeric(Time)) %>%
+  mutate(Event = as.numeric(Event)) 
+  
+km.df.all_source <- km.df.all_source[,c(1:4,6,5,8,7,9)]
+
+km.df.all_source2<-km.df.all_source %>% 
+  pivot_wider(names_from=Outcome,values_from = c(Event,Time)) %>%
+  select(!c(RSI,gard)) %>%
+  mutate(Info = case_when(
+    is.na(Event_Survival)&!is.na(Event_Recurrence) ~ "R",
+    !is.na(Event_Survival)&is.na(Event_Recurrence) ~ "S",
+    !is.na(Event_Survival)&!is.na(Event_Recurrence) ~ "B")
+  ) %>%
+  select(!c(Time_Recurrence,Time_Survival)) %>%
+  rename(RT = "Received_RT")
+
+
+# table: site  /  RT  /  Info  /  n1 / n2 / n3
+tt<-km.df.all_source2 %>%
+  add_count(name = "n1",Source,Site) %>%
+  # add_count(name = "n2", Source,Info) %>%
+  add_count(name = "n3", Source,Site,Info,RT) %>%
+  distinct_at(vars(n3),.keep_all = TRUE) %>%
+  select(!c(idx,Event_Survival,Event_Recurrence))
+
+# table: Site /  RT  /  info  / no. events recurrence  /  no. events OS
+tt2<-km.df.all_source2 %>%
+  group_by(Source,Site,RT,Info) %>%
+  summarise('no. rec'=sum(!is.na(Event_Recurrence)&Event_Recurrence!=0),
+            'no. OS'=sum(!is.na(Event_Survival)&Event_Survival!=0))
+
+
+tt3<-inner_join(tt,tt2) %>%
+  mutate(RT = if_else(RT==1,"+","-")) %>%
+  arrange(Site,desc(RT),factor(Info, levels=c("R","B","S")))
+
+tt3.1 <- tt3[,c(2,1,5,4,3,6,7,8)]
+tt3.2<-tt3.1 %>% arrange(Site,Source)
+
+t13<-tt3.2 %>% 
+  select(!c(Info)) %>%
+  rename(R = 'no. rec',S='no. OS') %>%
+  mutate(RT = recode(RT,'+'='+RT','-'='-RT')) %>%
+  pivot_longer(cols = c(R,S),names_to = 'Outcome',values_to = 'n_event') %>%
+  mutate(RT2 = RT) %>%
+  # unite(c(n3,RT2),col = 'RT_total',sep = '_') %>%
+  pivot_wider(names_from = c(RT,Outcome),values_from=c(n_event)) %>%
+  pivot_wider(names_from = RT2,names_prefix = 'Total_',values_from = n3)
+
+
+t14<-t13[c(1,2,3,6,7,9,4,5,8)]
+t15<-t14 %>% mutate_all(~ replace(., .==0,NA))
+t15<-t15 %>% 
+  unite(remove = F,c('-RT_R','Total_-RT'),col = '-RT_R (n/N)',sep='/') %>%
+  unite(remove = F,c('-RT_S','Total_-RT'),col = '-RT_S (n/N)',sep='/') %>%
+  unite(remove = F,c('+RT_R','Total_+RT'),col = '+RT_R (n/N)',sep='/') %>%
+  unite(remove = F,c('+RT_S','Total_+RT'),col = '+RT_S (n/N)',sep='/')
+
+print(xtable(
+  t15[c(1,2,3,4,6,9,11)] %>%
+  mutate_all(~ replace(., grep(x = .,'NA'),'-')))
+  )
+
+ # t15[c(1,2,3,4,6,9,11)] %>%
+ #  mutate_all(~ replace(., grep(x = .,'NA'),'-'))
+
+```
 \newpage
 # 2. Forest Plots
 
@@ -359,7 +450,7 @@ sumStats2 <- sumStats %>%
 
 sumStats3<- sumStats2 %>%
   mutate(Site = recode(Site, breast = "Breast", endometrial = "Endometrium", esophagus = "Esophagus", rectal="Rectal",
-         breast_TN="Breast TN",
+         breast_TN="TNBC",
          lung="NSCLC",HN="Head & Neck",
          pancreas="Pancreas",glioma="Glioma"))
 
@@ -389,6 +480,9 @@ Limits<-c("Composite", rev(unique(sumStats4 %>% filter(Site != 'Composite') %>% 
 
 sumStats4$Site <- factor(sumStats4$Site, levels = c(unique(sumStats4 %>% filter(Site != 'Composite') %>% pull(Site)), "Composite"))
 
+xmin=.7
+xmax=1.3
+sumStats4$title <- "+RT"
 gard.plot <- ggplot(sumStats4 %>% filter(variable=='GARD')) + 
   geom_pointrange(aes(y = Site, 
                       x=exp_coef, xmin=xmin, xmax=xmax,
@@ -400,9 +494,9 @@ gard.plot <- ggplot(sumStats4 %>% filter(variable=='GARD')) +
   theme_classic() +
   scale_linetype_manual(values = c("solid","21")) +
   scale_shape_manual(values=c(15,19))+
-  scale_color_manual(values=q2[c(1,2,3,8,5,9,10,11,4)]) +
+  scale_color_manual(values=q2[c(1,2,8,5,9,10,3,11,4)]) +
   scale_y_discrete(limits = rev(levels(sumStats4$Site))) +
-  scale_x_continuous(expand = expansion(mult=0.02,add=0)) +
+  scale_x_continuous(expand = expansion(mult=0.01,add=0), limits = c(xmin,xmax)) +
   scale_fill_manual( values = c(rgb(.7,.7,.7,.1),rgb(1,1,1,.1))) +
   scale_size_manual(values = c(.5,.5,.5,.5,.5,.5,.5,.8)) +
   xlab("Hazard Ratio") + ylab("") +
@@ -413,7 +507,9 @@ gard.plot <- ggplot(sumStats4 %>% filter(variable=='GARD')) +
     legend.spacing.y = unit(0,"pt"),
     panel.grid.major.y = element_blank(),
     panel.grid.minor.y = element_blank(),
-    plot.title = element_text(size=9.5,face='bold', hjust = .48, margin = margin(b=4,unit="pt"))
+    plot.title = element_text(size=9.5,face='bold', hjust = .5, margin = margin(b=4,unit="pt")),
+    plot.margin = margin(t=6, unit="pt"),
+    strip.text = element_text(size=9.5,face='bold')
     ) + 
   guides(
     linetype = guide_legend(order=2, keyheight = unit(26, "points"), reverse = T),
@@ -421,7 +517,8 @@ gard.plot <- ggplot(sumStats4 %>% filter(variable=='GARD')) +
     size = guide_none(),
     color = guide_legend(order=1)
     ) +
-  ggtitle(label = "GARD (+RT)")
+  # ggtitle(label = "+RT") +
+  facet_grid(. ~ title)
 
 gard.plot
 ```
@@ -578,7 +675,7 @@ sumStats.noRT2 <- sumStats.noRT %>%
   rename(exp_coef = "exp(coef)")
 
 sumStats.noRT3 <- sumStats.noRT2 %>%
-  mutate(Site = recode(Site, breast = "Breast", breast_TN = "Breast TN",
+  mutate(Site = recode(Site, breast = "Breast", breast_TN = "TNBC",
                        endometrial = "Endometrium", pancreas="Pancreas",glioma="Glioma"))
 
 sumStats.noRT4 <- sumStats.noRT3 %>%
@@ -599,11 +696,6 @@ sumStats.noRT4 <- sumStats.noRT4 %>%
 ```
 
 
-<!-- Merging +RT and -RT summary tables: -->
-
-```{r, include=FALSE, eval=FALSE}
-sumStats.allXRT<-full_join(x = sumStats4 %>% mutate(RT = 'Y'), sumStats.noRT4 %>% mutate(RT = 'N'))
-```
 
 #
 
@@ -615,6 +707,10 @@ Limits_noRT <- c("Composite", rev(unique(sumStats.noRT4 %>% filter(Site != 'Comp
 
 sumStats.noRT4$Site <- factor(sumStats.noRT4$Site, levels = c(unique(sumStats.noRT4 %>% filter(Site != 'Composite') %>% pull(Site)), "Composite"))
 
+xmin=.7
+xmax=1.3
+
+sumStats.noRT4$title <- "\U2012RT"#sprintf("%s",expression('-'))
 noRT.plot<-ggplot(sumStats.noRT4 %>% filter(variable=='GARD')) + 
   geom_pointrange(aes(y = Site, x=exp_coef, xmin=xmin, xmax=xmax,
                       color=Site, linetype=Outcome, shape=Outcome, size=Site),
@@ -625,7 +721,7 @@ noRT.plot<-ggplot(sumStats.noRT4 %>% filter(variable=='GARD')) +
   scale_shape_manual(values=c(15,19)) +
   scale_color_manual(values=q[c(1,2,5,3,11,4,6)]) +
   scale_y_discrete(limits = rev(levels(sumStats.noRT4$Site))) +
-  scale_x_continuous(expand = expansion(mult=0.02,add=0)) +
+  scale_x_continuous(expand = expansion(mult=0.01,add=0),  limits = c(xmin,xmax)) +
   scale_fill_manual( values = c(rgb(.7,.7,.7,.1),rgb(1,1,1,.1))) +
   scale_size_manual(values = c(.5,.5,.5,.5,.8)) +
   xlab("Hazard Ratio") + ylab("") +
@@ -636,8 +732,9 @@ noRT.plot<-ggplot(sumStats.noRT4 %>% filter(variable=='GARD')) +
     legend.spacing.y = unit(0,"pt"),
     panel.grid.major.y = element_blank(),
     panel.grid.minor.y = element_blank(),
-    plot.title = element_text(size=9.5,face='bold', hjust = .48, margin = margin(b=4,unit="pt")), 
-    plot.margin = margin(t=14, unit="pt")
+    plot.title = element_text(size=9.5,face='bold', hjust = .5, margin = margin(b=4,unit="pt")), 
+    plot.margin = margin(t=14, b=6, unit="pt"),
+    strip.text = element_text(size=9.5,face='bold')
     ) + 
   guides(
     linetype = guide_legend(order=2, keyheight = unit(26, "points"), reverse = T),
@@ -645,7 +742,8 @@ noRT.plot<-ggplot(sumStats.noRT4 %>% filter(variable=='GARD')) +
     size = guide_none(), 
     color = guide_legend(order=1)
     ) +
-  ggtitle(label='GARD (-RT)')
+  # ggtitle(label = "-RT") +
+  facet_grid(. ~ title)
 
 noRT.plot
 ```
@@ -808,7 +906,7 @@ fit<-fit.noRT.os.gard
 stats.df2 <- stats.df2 %>% 
   add_row(variable="gard",outcome="os",coef=unname(fit$coefficients), rt=0,
           chisq = anova(fit)[1,1], p = anova(fit)[1,3])
-p.noRT.lf.gard <- Predict(fit, gard=seq(0, 100, by = 1), Site=unique(noRT.os$Site)[1])
+p.noRT.os.gard <- Predict(fit, gard=seq(0, 100, by = 1), Site=unique(noRT.os$Site)[1])
 
 ```
 
@@ -843,11 +941,12 @@ print(xtable(stats.df3[,c(1,2,4,3,5)],digits=c(0,0,1,3,1,3)),
 
 p.gard.all <- bind_rows(p.gard.lf, p.gard.os, .id = "model")
 
+p.gard.all <- tibble(p.gard.all)
+
 p.gard.all <- p.gard.all %>%
   mutate(outcome = if_else(model==1, "Recurrence (+XRT)", "Survival (+XRT)")) %>%
-  mutate(Treatment = "+XRT") %>%
-  rename(GARD=gard) %>%
-  select(!Site) %>%
+  rename('GARD'='gard') %>%
+  select(!c('Site')) %>%
   rename(Outcome = outcome) %>%
   filter(GARD <= 60)
 
@@ -892,4 +991,69 @@ ggplot(p.gard.all) +
              label.size = 0, show.legend = FALSE,
              aes(label = sprintf("Coef = %.3f \nChi-Sq = %.1f \nP = %.3f", coef, chisq, p), x = x, y = y)) 
 
+
 ```
+
+<!-- 2 x 2 plot with +/- RT and GARD -->
+
+```{r, fig.width=6, fig.height=6}
+
+p.gard.all2 <- bind_rows(p.gard.lf, p.gard.os, p.noRT.lf.gard, p.noRT.os.gard, .id = "model")
+
+p.gard.all2 <- tibble(p.gard.all2)
+
+p.gard.all2 <- p.gard.all2 %>%
+  mutate(outcome = if_else(model==1 | model==3, "Recurrence", "Survival")) %>%
+  mutate(Treatment = if_else(model==1 | model ==2, "+RT", "-RT")) %>%
+  rename('GARD'='gard') %>%
+  select(!c('Site')) %>%
+  rename(Outcome = outcome) %>%
+  filter(GARD <= 60) %>%
+  unite(col = 'Outcome_Treatment', c('Outcome','Treatment'),sep = " ",remove = F)
+
+annot.gard2 <- stats.df %>%
+  rename(Treatment = rt) %>%
+  # filter(Treatment == 1) %>%
+  mutate(Treatment = if_else(Treatment==1,"+RT","-RT"))%>%
+  mutate(variable = if_else(variable=="gard","GARD","RSI")) %>%
+  filter(variable == "GARD") %>%
+  # mutate(variable = "GARD") %>%
+  mutate(outcome = if_else(outcome=="lf","Recurrence","Survival")) %>%
+  rename(Outcome = outcome) %>%
+  arrange(Outcome) %>%
+  mutate(x = c(4,4,4,4)) %>%
+  mutate(y = c(-1.5,-1.5,-1.5,-1.5))
+
+ggplot(p.gard.all2) + 
+  geom_line(aes(x=GARD,y=yhat,color=Outcome_Treatment)) + 
+  geom_ribbon(aes(x=GARD,ymin=lower,ymax=upper,fill=Outcome_Treatment, alpha=Treatment)) +
+  geom_hline(yintercept = 0, color = rgb(.05,.05,.05,.9), size=.35) +
+  scale_color_manual(values=c(q[10], rgb(.1,.4,.7,.9), q[10], rgb(.6,.3,.8,.8)) ) +
+  scale_fill_manual(values=c(q[10], rgb(.1,.5,.85,.3), q[10], rgb(.85,.7,.95,.1) ) ) +
+  scale_alpha_manual(values=c(.1,.3,.1,.3)) +
+  scale_x_continuous(expand = expansion(mult=c(0.01),add=c(0))) +
+  scale_y_continuous(expand = expansion(mult=c(0.02),add=c(0)),trans = 'reverse') +
+  facet_wrap(~Outcome+Treatment, scales = "fixed") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.title.x = element_text(size=9, margin = margin(8,4,2,4, unit = "pt"),
+                                face="bold",color = rgb(.1,.1,.1) ),
+    axis.title.y = element_text(size=9, face="bold", color = rgb(.1,.1,.1) ),
+    strip.text = element_text(size = 10,face = "bold", color = rgb(.1,.1,.1)),
+    strip.background = element_blank(),
+    panel.spacing.x = unit(16,"pt"),
+    plot.margin = margin(4,14,8,12, unit = "pt")
+    ) +
+  ylab("log Relative-Hazard") +
+  guides(fill = guide_none(), color = guide_none(), alpha = guide_none()) +
+  geom_label(data = annot.gard2, 
+             fill = rgb(.5,.5,.5,.1), hjust="left", 
+             size=2.4, label.r = unit(2,"points"), 
+             label.size = 0, show.legend = FALSE,
+             aes(label = sprintf("Coef = %.3f \nChi-Sq = %.1f \nP = %.3f", coef, chisq, p), x = x, y = y)) 
+
+```
+
