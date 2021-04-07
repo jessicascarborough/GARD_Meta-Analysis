@@ -16,6 +16,7 @@ knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 
 ```{r}
 library(gridExtra)
+library(grid)
 library(ggstance)
 library(colorspace)
 library(tidyverse)
@@ -72,10 +73,12 @@ summary.fit <- function(fit){
 ```{r}
 load("Data/data_df.rda")
 
-rsi.all<-rsi.all %>% unite('Source_Site',c(Source,Site), sep="_", remove = F)
-
 rsi.all<-add_column(rsi.all, 'alpha' = NA)
 rsi.all<-add_column(rsi.all, 'gard'  = NA)
+
+
+rsi.all<-rsi.all %>% unite('Source_Site',c(Source,Site), sep="_", remove = F)
+
 
 # sham doses
 rsi.all<-rsi.all %>% 
@@ -89,7 +92,6 @@ rsi.all<-rsi.all %>%
   )) %>%
   mutate(n = if_else(Received_RT==0,TD/2,n))
 
-# calculating GARD_clinical
 rsi.all <- rsi.all %>%
   mutate(alpha=log(RSI)/(-2) - 0.05*2) %>%
   mutate(gard=n*d*(alpha + 0.05*d))
@@ -98,7 +100,7 @@ rsi.all <- rsi.all %>%
 
 ```{r}
 rt.all <- filter(rsi.all, Received_RT==1)
-
+  
 rt.rec <- rt.all %>%
   filter(!is.na(Event)) %>%
   select(Source, Site, RSI, gard, Time, Event, TD)
@@ -130,7 +132,8 @@ all.os <- rsi.all %>%
 
 # Cohort Summaries:
 
-```{r}
+
+```{r, results='asis'}
 km.df <- all.rec %>% mutate(Received_RT = factor(Received_RT,levels=c(0,1)))
 km <- survfit(Surv(Time,Event)~ Site + Received_RT, data = km.df)
 t = c(1,5)
@@ -151,10 +154,16 @@ s3<-s3 %>% mutate(site = recode(site,
                        HN='Head and Neck',lung='NSCLC')) %>%
   rename(Site=site)
 
-print(xtable(s3,digits=3,type="latex"), comment = FALSE,include.rownames = F)
+print(xtable(s3,digits=c(0,0,3,3,3,3), caption = "KM Stats: First Recurrence"),
+      floating = TRUE, latex.environments = "center", 
+      include.rownames = F)
 ```
 
-```{r}
+\bigskip
+\bigskip
+
+
+```{r, results='asis'}
 km.df <- all.os %>% mutate(Received_RT = factor(Received_RT,levels=c(0,1)))
 km <- survfit(Surv(Time_OS,Event_OS)~ Site + Received_RT, data = km.df)
 t = c(1,5)
@@ -176,7 +185,144 @@ s3<-s3 %>% mutate(site = recode(site,
                        lung='NSCLC',pancreas='Pancreas')) %>%
   rename(Site=site)
 
-print(xtable(s3,digits=3,type="latex"), comment = FALSE,include.rownames = F)
+print(xtable(s3,digits=c(0,0,3,3,3,3), caption = "KM Stats: Survival"),
+      floating = TRUE, latex.environments = "center", 
+      include.rownames = F)
+```
+
+\bigskip
+
+ <!-- - Recurrence KM plot -->
+```{r, fig.width = 5, fig.height = 4, fig.align="center"}
+km.df <- all.rec
+km.rec <- survfit(Surv(Time,Event)~ Site + Received_RT, data = km.df)
+
+for (i in 1:length(km.rec$strata)) {
+  cur_strata = names(km.rec$strata[i])
+  count = unname(km.rec$strata[i])
+  c <- c(rep(cur_strata,count))
+  if (i==1){
+    c_all.rec <- c
+  } else {
+    c_all.rec <- c(c_all.rec,c)
+  }
+}
+
+km.rec_tbl <- bind_cols(time=km.rec$time, n.risk=km.rec$n.risk, 
+                    event=km.rec$n.event, censor=km.rec$n.censor, 
+                    surv=km.rec$surv, std.err=km.rec$std.err)
+
+km.rec_tbl$strata = c_all.rec
+km.rec_tbl <- km.rec_tbl %>%
+  separate(col = strata, into = c("Site", "Received_RT"),sep = ", ")%>%
+  mutate(Site = sub(pattern = "Site=",replacement = "", x=Site)) %>%
+  mutate(Received_RT = sub(pattern = "Received_RT=",replacement = "", x=Received_RT)) %>%
+  mutate(Site = recode(Site, breast="Breast",breast_TN="TNBC", 
+                       endometrial="Endometrium", HN="Head and Neck",lung="NSCLC")) %>%
+  mutate(Site = as.factor(Site)) %>%
+  mutate(Outcome = "Recurrence") %>%
+  mutate(Received_RT = if_else(Received_RT==0,"No","Yes")) %>%
+  mutate(Received_RT = factor(Received_RT, levels = c("Yes","No")))
+
+ggplot(km.rec_tbl) + 
+  geom_step(aes(x=time,y=surv,
+                 group=interaction(Site,Received_RT),
+                 color=Site, linetype=Received_RT)) + 
+  scale_x_continuous(expand=expansion(mult=0,add=0)) +
+  scale_y_continuous(expand=expansion(mult=0.01,add=0)) +
+  scale_color_manual(values=q[c(1,2,3,4,6,5)]) +
+  scale_linetype_manual(values = c("solid",'42')) +
+  guides(color=guide_legend(reverse = TRUE)) +
+  xlab("Years From Diagnosis") + ylab("Recurrence-Free Survival") + 
+  theme_light() + 
+  theme(plot.title = element_text(face="bold",size=10,hjust = .5),
+        legend.key.width = unit(22,units = "pt")) +
+  guides(color = guide_legend(order=1,reverse = F),
+         Received_RT = guide_legend(order=2, reverse = T)) +
+  coord_cartesian(xlim = c(0,10), ylim = c(0,1)) + ggtitle("KM: First Recurrence")
+
+```
+
+\bigskip
+
+ <!-- - Survival KM plot -->
+
+```{r, fig.width = 5, fig.height = 4,fig.align="center"}
+km.df <- all.os
+km.os<- survfit(Surv(Time_OS,Event_OS)~ Site + Received_RT, data = km.df)
+
+for (i in 1:length(km.os$strata)) {
+  cur_strata = names(km.os$strata[i])
+  count = unname(km.os$strata[i])
+  c <- c(rep(cur_strata,count))
+  if (i==1){
+    c_all <- c
+  } else {
+    c_all <- c(c_all,c)
+  }
+}
+km.os_tbl <- bind_cols(time=km.os$time, n.risk=km.os$n.risk, 
+                    event=km.os$n.event, censor=km.os$n.censor, 
+                    surv=km.os$surv, std.err=km.os$std.err)
+km.os_tbl$strata = c_all
+km.os_tbl <- km.os_tbl %>%
+  separate(col = strata, into = c("Site", "Received_RT"),sep = ", ")%>%
+  mutate(Site = sub(pattern = "Site=",replacement = "", x=Site)) %>%
+  mutate(Received_RT = sub(pattern = "Received_RT=",replacement = "", x=Received_RT)) %>%
+  mutate(Site = recode(Site, breast="Breast",breast_TN="TNBC",
+                       endometrial="Endometrium",glioma="Glioma",
+                       lung="NSCLC",pancreas="Pancreas")) %>%
+  mutate(Site = as.factor(Site)) %>%
+  mutate(Outcome = "Survival") %>%
+  mutate(Received_RT = if_else(Received_RT==0,"No","Yes")) %>%
+  mutate(Received_RT = factor(Received_RT, levels = c("Yes","No")))
+
+ggplot(km.os_tbl) + 
+  geom_step(aes(x=time,y=surv,
+                 group=interaction(Site,Received_RT),
+                 color=Site, linetype=Received_RT)) + 
+  # geom_point(data=filter(km_tbl, censor=="1"), 
+  #            aes(x=time,y=surv,color=Site), shape=3, size=.4) +
+  scale_x_continuous(expand=expansion(mult=0,add=0)) +
+  scale_y_continuous(expand=expansion(mult=0.01,add=0)) +
+  scale_color_manual(values=q[c(1,2,3,4,6,7)]) +
+  scale_linetype_manual(values = c("solid",'42')) +
+  guides(color=guide_legend(reverse = TRUE)) +
+  xlab("Years From Diagnosis") + ylab("Overall Survival") + 
+  theme_light() + 
+  theme(plot.title = element_text(face="bold",size=10,hjust = .5), 
+        legend.key.width = unit(22,units = "pt")) +
+  guides(color = guide_legend(order=1,reverse = F),
+         Received_RT = guide_legend(order=2)) + 
+  coord_cartesian(xlim = c(0,5), ylim = c(0,1)) + ggtitle("KM: Survival")
+
+```
+
+
+
+```{r, fig.width=3, fig.height=2, eval=FALSE}
+km.all_outcome <- bind_rows(km.rec_tbl,km.os_tbl)
+
+ggplot(km.all_outcome) + 
+  geom_step(aes(x=time,y=surv,
+                 group=interaction(Site,Received_RT),
+                 color=Site, linetype=Received_RT), size = .6) + 
+  # geom_point(data=filter(km_tbl, censor=="1"), aes(x=time,y=surv,color=Site), shape=3, size=.4) +
+  scale_x_continuous(expand=expansion(mult=0,add=0)) +
+  scale_y_continuous(expand=expansion(mult=0.01,add=0)) +
+  coord_cartesian(xlim=c(0,5), ylim=c(0,1)) +
+  # scale_color_manual(values=q) +#q[c(1,2,3,4,5,6,7)]) +
+  scale_linetype_manual(values = c('41',"solid")) +
+  # facet_wrap(vars(Outcome,Received_RT), nrow = 2, ncol=2) +
+  facet_wrap(~ Outcome, nrow=1) +
+  guides(color=guide_legend(reverse = TRUE)) +
+  xlab("Time (yrs)") + ylab("") + 
+  theme_bw() + 
+  theme(plot.title = element_text(face="bold",size=10,hjust = .5), 
+        aspect.ratio = .8,
+        panel.spacing = unit(12,"pt")) +
+  guides(color = guide_legend(order=1,reverse = FALSE),
+         Received_RT = guide_legend(order=2))
 ```
 
 
@@ -344,51 +490,35 @@ summ.all <- rbind(summ.all,s)
 sumStats.TD.os <- summ.all
 ```
 
- - combining results
+ <!-- - combining results -->
 ```{r}
 sumStats <- bind_rows(sumStats.rsi.rec,sumStats.rt.rec,
                       sumStats.rsi.os,sumStats.rt.os,
                       sumStats.TD.rec,sumStats.TD.os, .id = "model")
 
 # Modifying data for forest plot:
-sumStats2 <- sumStats %>%
+sum.stats.rt <- sumStats %>%
   mutate(Outcome = if_else(model==1 | model==2 | model==5, "Recurrence", "Survival")) %>%
   mutate(variable = case_when(
     model==1 | model ==3 ~ "RSI",
     model==2 | model ==4 ~ "GARD",
     model==5 | model ==6 ~ "TD",
     )) %>%
-  rename(Site = site) %>%
-  rename(exp_coef = "exp(coef)")
-
-sumStats3<- sumStats2
-
-sumStats3<- sumStats2 %>%
+  rename(Site = site, exp_coef = "exp(coef)") %>%
   mutate(Site = recode(Site, breast = "Breast", endometrial = "Endometrium", esophagus = "Esophagus", rectal="Rectal",
          breast_TN="TNBC",
          lung="NSCLC",HN="Head & Neck",
-         pancreas="Pancreas",glioma="Glioma"))
-
-# using HR * .01 for RSI
-sumStats4<-sumStats3 %>%
-  select(!c(z,'chi-sq',p,model)) %>%
+         pancreas="Pancreas",glioma="Glioma")) %>%
+  select(!c(z,'chi-sq',model)) %>%
   mutate(coef = if_else(variable=="RSI",-1*coef/100,coef)) %>%
   mutate(se = if_else(variable=="RSI",se/100,se)) %>%
   mutate(exp_coef = exp(coef)) %>%
   mutate(xmax = exp(coef+2*se)) %>%
   mutate(xmin = exp(coef-2*se)) %>%
   arrange(Site)
-
-sumStats4<-sumStats4 %>%
-  mutate(x = 0.82) %>%
-  group_by(Site) %>%
-  mutate(u = length(unique(n)) ) %>%
-  ungroup()
-
-# sumStats4%>%select(c(Site,n,n.event,Outcome))%>%unique()%>%arrange(desc(Outcome)) %>% arrange(Site)
 ```
 
- - no-RT group:
+ <!-- - no-RT group: -->
 
 ```{r, results = 'asis', include=TRUE}
 data <- noRT.rec
@@ -483,21 +613,18 @@ sumStats.noRT.rt.os <- summ.all
 ```
 
 
- - results table for no-RT
+ <!-- - results table for no-RT -->
 
 ```{r}
 sumStats.noRT <- bind_rows(sumStats.noRT.rsi.rec,sumStats.noRT.rt.rec,sumStats.noRT.rsi.os,sumStats.noRT.rt.os,.id = "model")
-sumStats.noRT2 <- sumStats.noRT %>%
+
+sum.stats.noRT <- sumStats.noRT %>%
   mutate(Outcome = if_else(model==1 | model==2, "Recurrence", "Survival")) %>%
   mutate(variable = if_else(model==1 | model==3, "RSI", "GARD")) %>%
   rename(Site = site) %>%
-  rename(exp_coef = "exp(coef)")
-
-sumStats.noRT3 <- sumStats.noRT2 %>%
+  rename(exp_coef = "exp(coef)") %>%
   mutate(Site = recode(Site, breast = "Breast", breast_TN = "TNBC",
-                       endometrial = "Endometrium", pancreas="Pancreas",glioma="Glioma"))
-
-sumStats.noRT4 <- sumStats.noRT3 %>%
+                       endometrial = "Endometrium", pancreas="Pancreas",glioma="Glioma"))%>%
   select(!c(z,'chi-sq',model)) %>%
   mutate(coef = if_else(variable=="RSI",-1*coef/100,coef)) %>%
   mutate(se = if_else(variable=="RSI",se/100,se)) %>%
@@ -506,67 +633,62 @@ sumStats.noRT4 <- sumStats.noRT3 %>%
   mutate(xmin = exp(coef-2*se)) %>%
   arrange(Site)
 
-sumStats.noRT4 <- sumStats.noRT4 %>%
-  mutate(x = 0.82) %>%
-  group_by(Site) %>%
-  mutate(u = length(unique(n)) ) %>%
-  ungroup()
-
 ```
 
 
- --creating combined table of results for RT and no-RT groups:
+ <!-- --creating combined table of results for RT and no-RT groups: -->
 ```{r}
-sumStats4<-sumStats4%>%mutate(RT='+RT')
-sumStats.noRT4<-sumStats.noRT4%>%mutate(RT='-RT')
-sumStats4<-bind_rows(sumStats4,sumStats.noRT4)
-sumStats4<-sumStats4 %>% mutate(RT=factor(RT,levels=c('+RT','-RT')))
-sumStats4<-sumStats4 %>% mutate(facet_label = case_when(
+sum.stats.rt<-sum.stats.rt%>%mutate(RT='+RT')
+sum.stats.noRT<-sum.stats.noRT%>%mutate(RT='-RT')
+sum.stats.all<-bind_rows(sum.stats.rt,sum.stats.noRT)
+sum.stats.all<-sum.stats.all %>% mutate(RT=factor(RT,levels=c('+RT','-RT')))
+sum.stats.all<-sum.stats.all %>% mutate(facet_label = case_when(
   RT=='+RT' & variable=='GARD' ~ 'GARD',
   RT=='+RT' & variable=='TD' ~ 'Total Radiation Dose',
   RT=='-RT' & variable=='GARD' ~ 'Sham GARD'
 ))
-sumStats4<-sumStats4 %>% mutate(facet_label = factor(facet_label, levels = c('GARD','Total Radiation Dose','Sham GARD')))
+sum.stats.all<-sum.stats.all %>% mutate(facet_label = factor(facet_label, levels = c('GARD','Sham GARD','Total Radiation Dose')))
+
 ```
 
 
+ <!-- - plot construction -->
 
+```{r, fig.width=6,fig.height=6}
+sum.stats.all$Site <- factor(sum.stats.all$Site, levels = c(unique(sum.stats.all %>% filter(Site != 'Composite') %>% pull(Site)), "Composite"))
 
- - plot construction
+tile.df<-tibble('Site' = rep(levels(sum.stats.all$Site),3), 
+                'Fill' = rep(c('rgb(1,1,1,0)','rgb(.7,.7,.7)'),12),
+                x=1,
+                facet_label=c(rep(c('GARD'),8),rep(c('Sham GARD'),8),rep(c('Total Radiation Dose'),8)))
 
-```{r, fig.width=5,fig.height=4}
-# Limits<-c("Composite", rev(unique(sumStats4 %>% filter(Site != 'Composite') %>% pull(Site))))
-
-sumStats4$Site <- factor(sumStats4$Site, levels = c(unique(sumStats4 %>% filter(Site != 'Composite') %>% pull(Site)), "Composite"))
-Limits <- rev(levels(sumStats4$Site))
+Limits <- rev(levels(sum.stats.all$Site))
 xmin=.8
 xmax=1.2
-# gard.plot <- 
-ggplot(sumStats4 %>% filter(variable=='GARD' | variable=='TD' )) + 
-  geom_pointrange(aes(y = Site, 
+
+ggplot(sum.stats.all %>% filter(variable=='GARD' | variable=='TD' )) + 
+  geom_tile(data=tile.df,aes(y=Site, x=x, fill=as.character(Fill)), width=.4, show.legend = FALSE) +
+  geom_vline(xintercept = 1) +
+  geom_pointrange(aes(y = Site,
                       x=exp_coef, xmin=xmin, xmax=xmax,
-                      color=Site, linetype=Outcome, 
+                      color=Site, linetype=Outcome,
                       size = Site,
-                      # size=factor(n),
                       shape=Outcome),
-                  # size = .5,
                   position = position_dodgev(height = .7), fatten = 3
                   ) +
-  geom_vline(xintercept = 1) +
-  # facet_wrap(~variable+Outcome, nrow = 2) +
   facet_wrap(~facet_label, nrow = 3) +
   theme_classic() +
-  scale_linetype_manual(values = c("solid","21")) +
+  scale_linetype_manual(values = c("solid","21")) + 
   scale_shape_manual(values=c(15,19))+
   scale_color_manual(values=q2[c(1,2,8,5,9,4,3,11)]) +
-  scale_y_discrete(limits = Limits) +
+  scale_y_discrete(limits = Limits, expand = expansion(mult=0, add=0)) +
   scale_x_continuous(expand = expansion(mult=0, add=0) ) + #, limits = c(xmin,xmax)) +
   scale_fill_manual( values = c(rgb(.7,.7,.7,.1),rgb(1,1,1,.1))) +
-  # scale_size_ordinal(range = c(.5,2)) +
   # scale_size_manual(values = c(.5,.5,.5,.5,.5,.5,.5,.5,.5,.5,.8)) +
-  scale_size_manual(values = c(.5,.5,.5,.5,.5,.5,.5,.8)) +
+  #scale_size_manual(values = c(.5,.5,.5,.5,.5,.5,.5,.8)) +
+  scale_size_manual(values = c(.5,.5,.5,.5,.5,.5,.5,.6)) +
   coord_cartesian(xlim = c(xmin,xmax),clip = "on") +
-  xlab("Hazard Ratio") + ylab("") +
+  xlab("Relative Hazard") + ylab("") +
   theme(
     axis.text.y = element_text(size = 8,margin = margin(0,0,2,0,unit="pt")),
     axis.text.x = element_text(size = 7),
@@ -584,162 +706,283 @@ ggplot(sumStats4 %>% filter(variable=='GARD' | variable=='TD' )) +
     size = guide_none(),
     color = guide_legend(order=1)
     )
-
 ```
 
 \bigskip
-\bigskip
 
- - "plot" for results tables
+ <!-- - stats results tables -->
 
-```{r,fig.width=5,fig.height=4}
+```{r, results='asis'}
 # creating a summary table
-sumStats5<-sumStats3 %>%
-  select(!c(z,'chi-sq',model)) %>%
-  mutate(coef = if_else(variable=="RSI",-1*coef/100,coef)) %>%
-  mutate(se = if_else(variable=="RSI",se/100,se)) %>%
-  mutate(exp_coef = exp(1*coef)) %>%
-  mutate(xmax = exp(coef+2*se)) %>%
-  mutate(xmin = exp(coef-2*se)) %>%
+sum.stats.table<-sum.stats.rt %>%
+  mutate(HR = round(exp(1*coef),3) ) %>%
+  mutate(xmax = round(exp(coef+2*se),3) ) %>%
+  mutate(xmin = round(exp(coef-2*se),3) ) %>%
   arrange(Site) %>%
   # filter(!is.na(p)) %>%
-  select(Site,exp_coef,n,n.event,Outcome,variable,p,xmin,xmax,Dxy)%>%
+  select(Site,HR,n,n.event,Outcome,variable,p,xmin,xmax)%>%
   mutate(RT='+RT')
 
-sumStats.noRT5<-sumStats.noRT3 %>%
-  select(!c(z,'chi-sq',model)) %>%
-  mutate(coef = if_else(variable=="RSI",-1*coef/100,coef)) %>%
-  mutate(se = if_else(variable=="RSI",se/100,se)) %>%
-  mutate(exp_coef = exp(1*coef)) %>%
-  mutate(xmax = exp(coef+2*se)) %>%
-  mutate(xmin = exp(coef-2*se)) %>%
+sum.stats.noRT.table<-sum.stats.noRT %>%
+  mutate(HR = round(exp(1*coef),3) ) %>%
+  mutate(xmax = round(exp(coef+2*se),3) ) %>%
+  mutate(xmin = round(exp(coef-2*se),3) ) %>%
   arrange(Site) %>%
-  select(Site,exp_coef,n,n.event,Outcome,variable,p,xmin,xmax)%>%
+  select(Site,HR,n,n.event,Outcome,variable,p,xmin,xmax)%>%
   mutate(RT='-RT')
 
-sumStats5<-bind_rows(sumStats5,sumStats.noRT5,.id = 'RT') %>%
+stats.table.all<-bind_rows(sum.stats.table,sum.stats.noRT.table,.id = 'RT') %>%
   mutate(RT=if_else(RT==1,'+RT','-RT')) %>%
   mutate(RT=factor(RT, levels=c('+RT','-RT') ))
-sumStats5<-sumStats5 %>% mutate(facet_label = case_when(
+stats.table.all<-stats.table.all %>% mutate(facet_label = case_when(
   RT=='+RT' & variable=='GARD' ~ 'GARD',
   RT=='+RT' & variable=='TD' ~ 'Total Radiation Dose',
   RT=='-RT' & variable=='GARD' ~ 'Sham GARD'
 ))
-sumStats5<-sumStats5 %>% mutate(facet_label = factor(facet_label, levels = c('GARD','Total Radiation Dose','Sham GARD')))
+stats.table.all$Site <- factor(stats.table.all$Site, levels = c(unique(stats.table.all %>% filter(Site != 'Composite') %>% pull(Site)), "Composite"))
 
 
-Limits<-c("Composite", rev(unique(sumStats5 %>% 
-                                    # filter(Outcome=='Recurrence',variable=='RSI') %>%
-                                    filter(Site != 'Composite') %>% pull(Site))))
+CPH_models_GARDPool_GARD_rec<-stats.table.all %>% 
+  filter((variable=='GARD') & (Outcome=='Recurrence') & (RT=='+RT')) %>%
+  select(c(Site,n,n.event,HR,xmin,xmax,p))
+CPH_models_GARDPool_GARD_surv<-stats.table.all %>% 
+  filter((variable=='GARD') & (Outcome=='Survival') & (RT=='+RT')) %>%
+  select(c(Site,n,n.event,HR,xmin,xmax,p))
 
+CPH_models_GARDPool_GARD<-full_join(x = CPH_models_GARDPool_GARD_rec,y = CPH_models_GARDPool_GARD_surv,by = "Site", suffix = c(".rec",".surv")) %>% arrange(Site)
 
-ggplot(sumStats5 %>% filter((variable=='GARD') | (variable=='TD') )) + #Outcome=='Recurrence',variable=='GARD')) + 
-  geom_text(aes(y=Site, x='n', label = sprintf("%i", n)), size=3) +
-  geom_text(aes(y=Site, x='events', label=sprintf("%i", n.event)), size=3) +
-  geom_text(aes(y=Site, x='RH', label=sprintf("%.3f", exp_coef)), size=3) +
-  geom_text(aes(y=Site, x='lower', label=sprintf("%.3f", xmin)), size=3) +
-  geom_text(aes(y=Site, x='upper', label=sprintf("%.3f", xmax)), size=3) +
-  geom_text(aes(y=Site, x='p', label=sprintf("%.3f", p)), size=3) +
-  # geom_text(aes(y=Site, x='Dxy', label=sprintf("%.3f", Dxy)), size=3) +
-  # facet_wrap(~variable + Outcome , nrow = 2) +
-  facet_wrap(~facet_label + Outcome , nrow = 3, ncol=2) +
-  scale_x_discrete(limits=c('n','events','RH','lower','upper','p'),position = 'top') +
-  scale_y_discrete(limits=Limits) + 
-  theme_classic() +
-  theme(axis.title.x = element_blank(),
-        axis.line.x.top = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.ticks.y = element_blank(),
-        axis.text.x = element_text(size=11,face = "bold"),
-        # strip.background = element_blank(),
-        strip.text = element_text(size=11),
-        panel.border = element_rect(fill = NA),
-        plot.title = element_text(size = 12, face = "bold")) +
-  ggtitle("Individual-Site Regression Results")
+print(xtable(bind_rows(Recurrence = CPH_models_GARDPool_GARD_rec,Survival = CPH_models_GARDPool_GARD_surv,.id = "Outcome") %>% arrange(Outcome,Site),
+             digits = c(0,0,0,0,0,3,3,3,3),caption = "\\textbf{CPH Results: GARD}"),
+      floating = TRUE, latex.environments = "center", hline.after = c(-1,0,6,12),
+      include.rownames = F)
 
-# sumStats3 %>% filter(Site=='Composite' & variable=='GARD') %>% select(c('chi-sq','p','n','n.event','Outcome','variable','coef'))
-# sumStats.noRT3 %>% filter(Site=='Composite' & variable=='GARD') %>% select(c('chi-sq','p','n','n.event','Outcome','variable','coef'))
+# print(xtable(CPH_models_GARDPool_GARD,digits = c(0,0,0,0,3,3,3,3,0,0,3,3,3,3), caption = "CPH Results: GARD"),
+#       floating = TRUE, latex.environments = "center",
+#       include.rownames = F)
+```
 
+\bigskip
+
+```{r, results='asis'}
+CPH_models_GARDPool_TD_rec<-stats.table.all %>% 
+  filter((variable=='TD') & (Outcome=='Recurrence') & (RT=='+RT')) %>%
+  select(c(Site,n,n.event,HR,xmin,xmax,p))
+
+CPH_models_GARDPool_TD_surv<-stats.table.all %>% 
+  filter((variable=='TD') & (Outcome=='Survival') & (RT=='+RT')) %>%
+  select(c(Site,n,n.event,HR,xmin,xmax,p))
+
+CPH_models_GARDPool_TD<-full_join(x = CPH_models_GARDPool_TD_rec,y = CPH_models_GARDPool_TD_surv,by = "Site", suffix = c(".rec",".surv")) %>% arrange(Site)
+
+print(xtable(bind_rows(Recurrence = CPH_models_GARDPool_TD_rec,Survival = CPH_models_GARDPool_TD_surv,.id = "Outcome") %>% arrange(Outcome,Site),
+             digits = c(0,0,0,0,0,3,3,3,3),caption = "\\textbf{CPH Results: RT Dose}"),
+      floating = TRUE, latex.environments = "center", hline.after = c(-1,0,6,12),
+      include.rownames = F)
+
+# print(xtable(CPH_models_GARDPool_TD,digits = c(0,0,0,0,3,3,3,3,0,0,3,3,3,3), caption = "CPH Results: RT Dose"),
+#       floating = TRUE, latex.environments = "center", 
+#       include.rownames = F)
+```
+
+\bigskip
+
+```{r, results='asis'}
+CPH_models_GARDPool_sham_rec<-stats.table.all %>% 
+  filter((variable=='GARD') & (Outcome=='Recurrence') & (RT=='-RT')) %>%
+  select(c(Site,n,n.event,HR,xmin,xmax,p))
+
+CPH_models_GARDPool_sham_surv<-stats.table.all %>% 
+  filter((variable=='GARD') & (Outcome=='Survival') & (RT=='-RT')) %>%
+  select(c(Site,n,n.event,HR,xmin,xmax,p))
+
+CPH_models_GARDPool_sham<-full_join(x = CPH_models_GARDPool_sham_rec,y = CPH_models_GARDPool_sham_surv,by = "Site", suffix = c(".rec",".surv")) %>% arrange(Site)
+
+print(xtable(bind_rows(Recurrence = CPH_models_GARDPool_sham_rec,Survival = CPH_models_GARDPool_sham_surv,.id = "Outcome") %>% arrange(Outcome,Site),
+             digits = c(0,0,0,0,0,3,3,3,3),caption = "\\textbf{CPH Results: Sham GARD}"),
+      floating = TRUE, latex.environments = "center", hline.after = c(-1,0,3,7),
+      include.rownames = F)
+
+# print(xtable(CPH_models_GARDPool_sham,digits = c(0,0,0,0,3,3,3,3,0,0,3,3,3,3), caption = "CPH Results: Sham GARD"),
+#       floating = TRUE, latex.environments = "center", 
+#       include.rownames = F)
 ```
 
 
+\newpage
+
 # Interaction Test
+
+```{r,fig.width=5,fig.height=3, fig.align='center'}
+data <- rsi.all %>%
+  filter(!is.na(Event)) %>%
+  select(Source_Site, Source, Site, RSI, gard, Time, Event, TD, Received_RT) %>%
+  mutate(Received_RT = if_else(Received_RT==1,'B','A'))
+dd <- datadist(data)
+options(datadist='dd')
+
+fit<-cph(Surv(Time, Event) ~ Received_RT*rcs(gard,5) + strat(Site) , data = data, x=T, y=T)
+
+p<-Predict(fit,
+           gard = c(10,20,30,40,50), 
+           Received_RT=c('A','B')
+           )
+
+p<-data.frame(p)
+
+ggplot(p) +  
+  geom_pointrange(aes(x=gard,y=yhat,ymin=lower,ymax=upper,color=Received_RT), position=position_dodge(width=1)) +
+  scale_x_continuous(expand = expansion(mult=0.03, add=0)) +
+  ylab("log Relative Hazard (First Recurrence)") + xlab("GARD") + 
+  theme_bw()
+
+```
+
+\bigskip
 
 ```{r}
 data <- rsi.all %>%
   filter(!is.na(Event)) %>%
   select(Source_Site, Source, Site, RSI, gard, Time, Event, TD, Received_RT) %>%
-  mutate(Received_RT = factor(Received_RT))
+  mutate(Received_RT = if_else(Received_RT==1,'B','A')) %>%
+  rename(GARD = 'gard')
 dd <- datadist(data)
 options(datadist='dd')
+fit<-cph(Surv(Time, Event) ~ Received_RT*GARD + strat(Site) , data = data, x=T, y=T)
+fit.linear<-fit
+fit<-cph(Surv(Time, Event) ~ Received_RT*rcs(GARD,5) + strat(Site) , data = data, x=T, y=T)
+fit.rcs<-fit
 
-fit<-cph(Surv(Time, Event) ~ Received_RT*pol(gard,2) + strat(Site) , data = data, x=T, y=T) #subset=(gard<=40))
-fit<-cph(Surv(Time, Event) ~ Received_RT*gard + strat(Site) , data = data, x=T, y=T)#, subset=(gard>=19.2))
+stats_rec_rcs<-c(c(anova(fit)[c(1,3,4),1]),c(anova(fit)[c(1,3,4),3]))
 
-fit<-cph(Surv(Time, Event) ~ Received_RT*gard + strat(Site) , data = data, x=T, y=T, subset=(gard>=19.2))
-data %>% count(Received_RT)
-data %>% filter(gard>=19.2) %>% count(Received_RT)
-
-anova(fit)
-fit
-# p<-Predict(fit, RSI = seq(.01,.7,by=.01), Received_RT=c(0,1))
-p<-Predict(fit, gard = data%>%filter(gard<=60)%>%pull(gard), Received_RT=c(0,1))
+p<-Predict(fit, GARD = seq(0,80,by=0.1), Received_RT=c('A','B'))
 p<-data.frame(p)
+p<-p %>% mutate(Received_RT = if_else(Received_RT=='B','Yes','No'))
 
-ggplot(p) + geom_point(aes(x=gard,y=yhat,color=factor(Received_RT) ), size=1) +
-  geom_ribbon(aes(x=gard,ymin=lower,ymax=upper,fill=factor(Received_RT) ),alpha=.3) + scale_y_continuous(limits=c(-4,4))
+interaction_rec_rcs <- ggplot(p) + geom_line(aes(x=GARD,y=yhat,color=Received_RT), size=.4) +
+  geom_ribbon(aes(x=GARD,ymin=lower,ymax=upper,fill=Received_RT),alpha=.2) +
+  geom_vline(xintercept=19.2, size=.4, linetype='22') +
+  scale_y_continuous(expand = expansion(mult=0,add=0), limits=c(-4,3)) +
+  scale_x_continuous(expand = expansion(mult=0,add=0), 
+                     minor_breaks = c(5,15,25,35,45), limits = c(0,40)) + 
+  ylab("log Relative Hazard (First Recurrence)") + xlab("GARD") + 
+  theme_bw() +
+  theme(legend.position = "left")
+
+# interaction_rec_rcs
+
+
+fit<-cph(Surv(Time, Event) ~ Received_RT*GARD + strat(Site) , data = data, x=T, y=T, subset=(GARD>=19.2))
+fit.gt19<-fit
+stats_rec_gt19 <- c(c(anova(fit)[c(1,3,5),1]),c(anova(fit)[c(1,3,5),3]))
+
+p<-Predict(fit, GARD = seq(0,80,by=0.1), Received_RT=c('A','B'), Site = unique(data$Site)[1])
+p<-data.frame(p)
+p<-p %>%
+  mutate(Received_RT = if_else(Received_RT=='B','Yes','No')) %>%
+  mutate(below19 = if_else(GARD<=19.2,'Y','N'))
+
+interaction_rec_gt19 <- ggplot(p) + 
+  geom_line(aes(x=GARD,y=yhat,color=Received_RT, linetype=below19), size=.3) +
+  geom_ribbon(aes(x=GARD,ymin=lower,ymax=upper,fill=Received_RT, alpha = below19)) +
+  geom_vline(xintercept=19.2, size=.4, linetype='22') +
+  scale_y_continuous(expand = expansion(mult=0,add=0), limits=c(-4,3)) +
+  scale_x_continuous(expand = expansion(mult=0,add=0), 
+                     minor_breaks = c(5,15,25,35,45), limits = c(0,40)) + 
+  scale_linetype_manual(values = c('solid','44')) +
+  scale_alpha_manual(values = c(.2,.1)) +
+  guides(linetype = guide_none(), fill = guide_none(), alpha = guide_none()) +
+  ylab("") + xlab("GARD") + 
+  theme_bw() +
+  theme(legend.position = "none")
+
+# interaction_rec_gt19
 ```
 
-```{r}
-xtable(anova(fit), digits = 5)
+
+```{r, fig.width=10, fig.height=4}
+int_grobs <- list(interaction_rec_rcs, interaction_rec_gt19)
+
+grid.arrange(grobs=int_grobs,ayout_matrix = rbind(c(1,2,NA)), widths = c(20,15.5,1))
+
+# grob_interaction_rec <- arrangeGrob(grobs=int_grobs, layout_matrix = rbind(c(1,2,NA)), widths = c(20,15.5,1))
+
 ```
 
-```{r}
+\bigskip
+
+```{r, results='asis'}
+print(xtable(anova(fit.linear)[c(1,3,5,6),c(1,2,3)], digits = c(0,2,0,3),caption = "Interaction RTxGARD: Linear (Recurrence)"),
+      floating = TRUE, latex.environments = "center", 
+      include.rownames = T)
+
+print(xtable(anova(fit.rcs)[c(1,3,5,6),c(1,2,3)], digits = c(0,2,0,3),caption = "Interaction RTxGARD: RCS (Recurrence)"),
+      floating = TRUE, latex.environments = "center", 
+      include.rownames = T)
+
+print(xtable(anova(fit.gt19)[c(1,3,5,6),c(1,2,3)], digits = c(0,2,0,3),caption = "Interaction RTxGARD: GARD>19.2 (Recurrence)"),
+      floating = TRUE, latex.environments = "center", 
+      include.rownames = T)
+```
+
+```{r, include=F}
 results=data.frame('g'=0,'p_interaction'=0,'p_RSI'=0)
 i=1
-for (g in seq(17,22,by=.1)){
-  c<-cph(Surv(Time, Event) ~ Received_RT*RSI + strat(Site) , data = data, x=T, y=T, subset=(gard>=g))
+for (g in seq(17,28,by=.1)){
+  c<-cph(Surv(Time, Event) ~ Received_RT*GARD + strat(Site) , data = data, x=T, y=T, subset=(GARD>=g))
   results[i,'g']=g
   results[i,'p_interaction'] = anova(c)[5,3]
   results[i,'p_RSI'] = (1-pnorm(abs(c$coef[2]/sqrt(abs(c$var))[2,2]),0,1))*2
   i=i+1
 }
-results
+
+ggplot(results) + geom_point(aes(x=g,y=p_interaction)) + 
+  geom_hline(yintercept=.05) + 
+  ylim(c(0,.5))
+
 ```
 
-
-```{r}
+  <!-- - surv -->
+```{r, fig.width=5,fig.height=3,fig.align="center"}
+mean_MGMT <- mean(rsi.all%>%filter(Site=='glioma')%>%pull(MGMT_Expression))
 data <- rsi.all %>%
   filter(!is.na(Event_OS)) %>%
-  mutate(MGMT_Expression = if_else(Site!='glioma',5.457623,MGMT_Expression)) %>%
-  select(Source_Site, Source, Site, RSI, gard, Time_OS, Event_OS, TD, Received_RT, MGMT_Expression) %>%
-  mutate(Received_RT = factor(Received_RT))
+  mutate(MGMT_Expression = if_else(Site!='glioma',mean_MGMT,MGMT_Expression)) %>%
+  select(Site, RSI, gard, Time_OS, Event_OS, TD, Received_RT, MGMT_Expression) %>%
+  mutate(Received_RT = if_else(Received_RT==0,'B','A')) %>%
+  rename(GARD = 'gard')
 dd <- datadist(data)
 options(datadist='dd')
 
-fit<-cph(Surv(Time_OS, Event_OS) ~ Received_RT*gard + strat(Site)  , data = data, x=T, y=T)
-# plot(fit, "RSI" = NA)
-fit
-anova(fit)
-p<-Predict(fit, gard = seq(1,80,by=1),
-           # MGMT_Expression=5.457623, 
-           Received_RT=c(0,1))
+fit<-cph(Surv(Time_OS, Event_OS) ~ GARD*Received_RT + strat(Site), # + MGMT_Expression ,
+         data = data, x=T, y=T)
+p<-Predict(fit, 
+           GARD = seq(1,60,by=1), 
+           Received_RT=c('A','B')
+           )
+p<-data.frame(p)
+p<-p %>% mutate(Received_RT = if_else(Received_RT=='B','Yes','No'))
 
-ggplot(p)
+ggplot(p) + 
+  geom_line(aes(x=GARD,y=yhat, color=Received_RT)) +
+  geom_ribbon(aes(x=GARD,ymax=upper,ymin=lower, fill=Received_RT), alpha=.2) +
+  scale_x_continuous(expand = expansion(mult=0, add=0)) +
+  ylab("log Relative Hazard (Survival)") + xlab("GARD") + 
+  theme_bw()
 ```
 
-
-```{r}
-xtable(anova(fit), digits = 5)
+```{r, results='asis'}
+print(xtable(anova(fit)[c(1,3,5,6),c(1,2,3)], digits = c(0,2,0,3), caption = "Interaction Test RTxGARD: Survival"),
+      floating = TRUE, latex.environments = "center", 
+      include.rownames = T)
 ```
+
 
 # Waterfall plots:
 
-recurrence fig
+<!-- recurrence fig -->
 
 ```{r,fig.width=5,fig.height=4}
-data<-rt.rec %>% 
-  mutate(Time=if_else(Time==0,0.01,Time ) ) %>%
+data<-rt.rec%>% 
   mutate(Site = recode(Site, breast = "Breast", endometrial = "Endometrium", esophagus = "Esophagus", rectal="Rectal",
          breast_TN="TNBC",
          lung="NSCLC",HN="Head & Neck",
@@ -751,22 +994,27 @@ f<-cph(Surv(Time, Event) ~ gard + strat(Site), data = data,x=T, y=T, surv = T)
 p_gard<-Predict(f, gard = seq(1,80,by=1))
 p_gard<-data.frame(p_gard)
 
-gg_RH_lineplot<-ggplot(p_gard) + geom_line(aes(x=gard,y=exp(yhat))) +
-  geom_abline(intercept=1, slope=0) +
-  geom_ribbon(aes(x=gard,ymax=exp(upper),ymin=exp(lower) ), fill=q[1], alpha=.2) + theme_bw()
+gg_RH_lineplot<-ggplot(p_gard) + geom_line(aes(x=gard,y=yhat), color=q[1]) +
+  geom_abline(intercept=0, slope=0) +
+  geom_ribbon(aes(x=gard,ymax=upper,ymin=lower ), fill=q[1], alpha=.2) + 
+  scale_x_continuous(expand = expansion(mult=0, add=0)) +
+  ylab("log Relative Hazard (First Recurrence)") + xlab("GARD") + 
+  theme_classic()
 
 gg_RH<-ggplot(p_gard) + geom_col(aes(x=gard,y=exp(yhat)-1,fill=(exp(yhat)-.95) ), width=.95) +
   geom_linerange(aes(x=gard,ymax=exp(upper)-1,ymin=exp(lower)-1), alpha=.8) +
   geom_hline(yintercept=0) +
   geom_vline(xintercept=28, linetype='62') + 
-  geom_text(aes(x=35,y=.4), label="Mean GARD value \nfor cohort analyzed", size=3) +
+  geom_text(aes(x=37,y=.4), label="Mean GARD value \nfor cohort analyzed", size=3) +
   geom_point(aes(x=c(28),y=0), color='red') +
   scale_y_continuous(labels=function(x) (x+1) ) +
   scale_x_continuous(limits=c(0,82), expand=expansion(mult=0,add=0)) + 
-  ylab("Hazard Ratio (Any Recurrence)") + xlab("GARD") + 
+  ylab("Relative Hazard (First Recurrence)") + xlab("GARD") + 
   scale_fill_continuous_diverging(palette="Blue-Red") + guides(fill=guide_none()) +
   theme_bw() +
-  theme(plot.margin = margin(t=12,l=16,r=12,unit="pt"))
+  theme(plot.margin = margin(t=12,l=22,r=12,unit="pt"), 
+        # plot.title = element_text(face = "bold",hjust = 0, size=14,margin = margin(t=0,r=0,b=0,l=0,unit="pt")),
+        plot.title.position = "plot") #+ ggtitle(label="B.")
 
 gg_hist<-ggplot(rt.rec %>%filter(gard<=80)) + 
   geom_density(aes(x=gard), adjust=1.2) +
@@ -782,7 +1030,7 @@ gg_hist<-ggplot(rt.rec %>%filter(gard<=80)) +
 
 
 
-```{r,fig.width=5,fig.height=5}
+```{r,fig.width=6,fig.height=5}
 for (g in seq(0,80,by=1)){
   for (t in c(0,1,2,3,4,5)){
     p_t<-Predict(f,gard=g, time=t, Site=unique(data$Site))
@@ -832,26 +1080,23 @@ n.plot<-n.plot%>%filter(gard>0)
 gg_nom<-ggplot(n.plot) +
   geom_point(aes(x=gard,y=site)) + 
   geom_hline(yintercept=site) +
-  geom_text(aes(x=gard,y=site,label=ss),nudge_y = .3,size=3) + 
+  geom_text(aes(x=gard,y=site,label=ss),nudge_y = .4,size=3) + 
   scale_x_continuous(limits=c(0,80), expand=expansion(mult=0,add=1)) + 
   scale_y_discrete(limits=rev(sites)) +
   theme_classic() + 
   theme(axis.line.x = element_blank(),
         axis.ticks.x = element_blank(),
         axis.text.x = element_blank(),
-        axis.text.y = element_text(angle = 50,size=8),
-        axis.title = element_blank(), plot.margin = margin(l=8,r=12,b=12,t=10,unit="pt"))
+        axis.text.y = element_text(angle = 40,size=8),
+        axis.title = element_blank(), plot.margin = margin(l=8,r=12,b=12,t=8,unit="pt"))
 
-# grid.arrange(gg_hist,gg_RH,gg_nom,nrow=3, heights=c(1,4,1.5))
-grid.arrange(gg_RH,gg_nom,nrow=2, heights=c(4,1.5))
+# grid.arrange(gg_RH,gg_nom,nrow=2, heights=c(4,1.5))
 
-# grob_rec<-arrangeGrob(gg_hist,gg_RH,gg_nom,nrow=3, heights=c(1,4,1.5))
-grob_rec<-arrangeGrob(gg_RH,gg_nom,nrow=2, heights=c(4,1.5))
-
+#grob_rec<-arrangeGrob(gg_RH,gg_nom,nrow=2, heights=c(4,1.5))
 ```
 
 
-surv waterfall
+<!-- surv waterfall -->
 
 ```{r,fig.width=5,fig.height=4}
 mean_MGMT <- mean(rt.os%>%filter(Site=='glioma')%>%pull(MGMT_Expression))
@@ -870,22 +1115,31 @@ p_gard_OS<-Predict(f_OS, gard = unique_gard$gard, #seq(4,80,by=1),
                    MGMT_Expression=5.457623)
 p_gard_OS<-data.frame(p_gard_OS)
 
+gg_RH_lineplot_OS<-ggplot(p_gard_OS) + geom_line(aes(x=gard,y=yhat), color=q[2]) +
+  geom_abline(intercept=0, slope=0) +
+  geom_ribbon(aes(x=gard,ymax=upper,ymin=lower), fill=q[2], alpha=.2) + 
+  scale_x_continuous(expand = expansion(mult=0, add=0)) +
+  ylab("log Hazard Ratio (Overall Survival)") + xlab("GARD") + 
+  coord_cartesian(xlim = c(0,50), ylim = c(-1.5,1)) +
+  theme_classic()
 
-  
+
 xmax <- 50
 
 gg_RH_OS<-ggplot(p_gard_OS) + geom_col(aes(x=gard,y=exp(yhat)-1,fill=(exp(yhat)-.95) ), width=.95) +
   geom_linerange(aes(x=gard,ymax=exp(upper)-1,ymin=exp(lower)-1), alpha=.8) +
   geom_hline(yintercept=0) +
   geom_vline(xintercept=21.5, linetype='62') + 
-  geom_text(aes(x=26,y=.4), label="Mean GARD value \nfor cohort analyzed", size=3) +
+  geom_text(aes(x=27,y=.4), label="Mean GARD value \nfor cohort analyzed", size=3) +
   geom_point(aes(x=c(21.5),y=0), color='red') +
   scale_y_continuous(labels=function(x) (x+1) ) +
   scale_x_continuous(limits=c(0,xmax), expand=expansion(mult=0,add=0)) + 
-  ylab("Hazard Ratio (Overall Survival)") + xlab("GARD") + 
+  ylab("Relative Hazard (Overall Survival)") + xlab("GARD") + 
   scale_fill_continuous_diverging(palette="Blue-Red") + guides(fill=guide_none()) +
   theme_bw() +
-  theme(plot.margin = margin(t=12,l=14,r=12,unit="pt"))
+  theme(plot.margin = margin(t=12,l=20,r=12,unit="pt"), 
+        # plot.title = element_text(face = "bold",hjust = 0, size=14,margin = margin(t=0,r=0,b=0,l=0,unit="pt")),
+        plot.title.position = "plot") #+ ggtitle(label = "A.")
 
 gg_hist_OS<-ggplot(rt.os %>%filter(gard<=80)) + 
   geom_density(aes(x=gard), adjust=1.2) +
@@ -896,13 +1150,10 @@ gg_hist_OS<-ggplot(rt.os %>%filter(gard<=80)) +
   xlab("") + ylab("Density") + theme_bw() +
   theme(axis.text.y = element_blank(),axis.ticks.y=element_blank(),plot.margin = margin(l=28,r=12,t=12,unit="pt")) 
   
-# grid.arrange(gg_RH_OS,gg_hist_OS,nrow=2, heights=c(4,1))
-
-# ggplot(rt.all) + geom_histogram(aes(x=gard, fill=Site)) + scale_fill_manual(values=q[c(1:8)])
 ```
 
 
-```{r,fig.width=5,fig.height=5}
+```{r,fig.width=6,fig.height=5}
 for (g in seq(0,80,by=1)){
   for (t in c(0,1,2,3,4,5)){
     p_t<-Predict(f_OS,gard=g,MGMT_Expression=5.457623, time=t, Site=unique(data$Site))
@@ -952,29 +1203,212 @@ n.plot.OS<-n.plot.OS%>%filter(gard>0)
 gg_nom_OS<-ggplot(n.plot.OS) +
   geom_point(aes(x=gard,y=site)) + 
   geom_hline(yintercept=site) +
-  geom_text(aes(x=gard,y=site,label=ss),nudge_y = .3,size=3) + 
+  geom_text(aes(x=gard,y=site,label=ss),nudge_y = .4,size=3) + 
   scale_x_continuous(limits=c(0,xmax), expand=expansion(mult=0,add=1)) + 
   scale_y_discrete(limits=rev(sites)) +
   theme_classic() + 
   theme(axis.line.x = element_blank(),
         axis.ticks.x = element_blank(),
         axis.text.x = element_blank(),
-        axis.text.y = element_text(angle = 50,size=8),
-        axis.title = element_blank(), plot.margin = margin(l=6,r=12,b=12,t=10,unit="pt"))
+        axis.text.y = element_text(angle = 40,size=8),
+        axis.title = element_blank(), plot.margin = margin(l=6,r=12,b=12,t=8,unit="pt"))
 
-# grid.arrange(gg_hist_OS,gg_RH_OS,gg_nom_OS, nrow=3, heights=c(1,4,1.5))
-grid.arrange(gg_RH_OS,gg_nom_OS, nrow=2, heights=c(4,1.5))
+# grid.arrange(gg_RH_OS,gg_nom_OS, nrow=2, heights=c(4,1.5))
 
-
-# grob_surv<-arrangeGrob(gg_hist_OS,gg_RH_OS,gg_nom_OS, nrow=3, heights=c(1,4,1.5))
-grob_surv<-arrangeGrob(gg_RH_OS,gg_nom_OS, nrow=2, heights=c(4,1.5))
+# grob_surv<-arrangeGrob(gg_RH_OS,gg_nom_OS, nrow=2, heights=c(4,1.5))
 
 ```
 
 
-```{r, fig.width=10,fig.height=5}
-# grid.arrange(gg_RH,gg_RH_OS,gg_nom,gg_nom_OS, nrow=2,ncol=2, heights=c(4,1.5))
+```{r, fig.width=7,fig.height=10}
+gtA<-textGrob(label = "A.",y=.92,x=1,gp=gpar(fontsize=18,fontface="bold"))
+gtB<-textGrob(label = "B.",y=.92,x=1,gp=gpar(fontsize=18,fontface="bold"))
 
-grob_all_outcomes<-arrangeGrob(gg_RH,gg_RH_OS,gg_nom,gg_nom_OS, nrow=2, ncol=2, heights=c(4,1.5))
+grobs=list(gg_RH_OS,gg_nom_OS,gg_RH,gg_nom, gtA, gtB)
+
+grob_all_outcomes<-arrangeGrob(grobs=grobs,
+             layout_matrix = cbind(c(5,NA,6,NA),c(1,2,3,4)),
+             widths=c(1,14),heights=c(4,1.5,4,1.5))
+
+grid.arrange(grobs=grobs,
+             layout_matrix = cbind(c(5,NA,6,NA),c(1,2,3,4)),
+             widths=c(1,14),heights=c(4,1.5,4,1.5))
+```
+
+
+## Line plots of log RH CPH models:
+
+```{r}
+data<-rt.rec%>% 
+  mutate(Site = recode(Site, breast = "Breast", endometrial = "Endometrium", esophagus = "Esophagus", rectal="Rectal",
+         breast_TN="TNBC",
+         lung="NSCLC",HN="Head & Neck",
+         pancreas="Pancreas",glioma="Glioma"))
+dd <- datadist(data)
+options(datadist='dd')
+f<-cph(Surv(Time, Event) ~ gard + strat(Site), data = data,x=T, y=T, surv = T)
+stats_rec_RT <- summary.fit(f)
+p_rec_RT<-Predict(f, gard = seq(1,80,by=1))
+p_rec_RT<-data.frame(p_rec_RT)
+
+data<-noRT.rec%>% 
+  mutate(Site = recode(Site, breast = "Breast", endometrial = "Endometrium"))
+dd <- datadist(data)
+options(datadist='dd')
+f<-cph(Surv(Time, Event) ~ gard + strat(Site), data = data,x=T, y=T, surv = T)
+stats_rec_noRT <- summary.fit(f)
+
+p_rec_noRT<-Predict(f, gard = seq(1,80,by=1))
+p_rec_noRT<-data.frame(p_rec_noRT)
+```
+
+```{r}
+mean_MGMT <- mean(rt.os%>%filter(Site=='glioma')%>%pull(MGMT_Expression))
+data<-rt.os %>% 
+  mutate(MGMT_Expression = if_else(Site!='glioma',mean_MGMT,MGMT_Expression)) %>%
+  mutate(Site = recode(Site, breast = "Breast", endometrial = "Endometrium", esophagus = "Esophagus", rectal="Rectal",
+         breast_TN="TNBC", lung="NSCLC",HN="Head & Neck",pancreas="Pancreas",glioma="Glioma"))
+dd <- datadist(data)
+options(datadist='dd')
+f_OS<-cph(Surv(Time_OS, Event_OS) ~ gard + MGMT_Expression + strat(Site), data = data,x=T, y=T, surv = T)
+stats_surv_RT <- summary.fit(f_OS)
+
+p_surv_RT<-Predict(f_OS, gard = seq(1,80,by=1),MGMT_Expression=mean_MGMT)
+p_surv_RT<-data.frame(p_surv_RT)
+
+data<-noRT.os %>% 
+  mutate(MGMT_Expression = if_else(Site!='glioma',mean_MGMT,MGMT_Expression)) %>%
+  mutate(Site = recode(Site, endometrial = "Endometrium",pancreas="Pancreas",glioma="Glioma"))
+dd <- datadist(data)
+options(datadist='dd')
+f_OS<-cph(Surv(Time_OS, Event_OS) ~ gard + MGMT_Expression + strat(Site), data = data,x=T, y=T, surv = T)
+stats_surv_noRT <- summary.fit(f_OS)
+
+p_surv_noRT<-Predict(f_OS, gard = seq(1,80,by=1),MGMT_Expression=5.457623)
+p_surv_noRT<-data.frame(p_surv_noRT)
+```
+
+
+```{r}
+p_all <- bind_rows(p_rec_RT,p_rec_noRT,p_surv_RT,p_surv_noRT,.id = 'model')
+p_all<-p_all %>% 
+  mutate(RT = if_else(model==1 | model==3, 'Yes', 'No')) %>%
+  mutate(Outcome  = if_else(model==1 | model==2, 'Recurrence', 'Survival')) %>%
+  select(model, gard, yhat, lower, upper, RT, Outcome)
+
+stats_all <- bind_rows(stats_rec_RT,stats_rec_noRT,stats_surv_RT,stats_surv_noRT, .id='model')
+stats_all <- stats_all %>%
+  mutate(RT = if_else(model==1 | model==3, 'Yes', 'No')) %>%
+  mutate(Outcome  = if_else(model==1 | model==2, 'Recurrence', 'Survival')) %>%
+  mutate(x = c(2,30,2,30), y = c(1.5)) %>%
+  rename(chisq = 'chi-sq')
+
+ggplot(p_all) + geom_line(aes(x=gard,y=yhat, color = RT)) +
+  geom_abline(intercept=0, slope=0) +
+  geom_ribbon(aes(x=gard,ymax=upper,ymin=lower, fill = RT), alpha=.2) + 
+  scale_x_continuous(expand = expansion(mult=0, add=0)) +
+  facet_wrap(~Outcome, nrow = 1) +
+  xlab("GARD") + 
+  ylab("log Relative Hazard") +
+  theme_classic() +
+  geom_label(data = stats_all,
+             fill = rgb(.5,.5,.5,.1), hjust="left",
+             size=2.4, label.r = unit(2,"points"),
+             label.size = 0, show.legend = FALSE,
+             aes(label = sprintf("RT (%s):\nCoef = %.3f \nChi-Sq = %.1f \nP = %.3f", RT, coef, chisq, p), x = x, y = y))
 
 ```
+
+
+
+# Dose-GARD Distribution Comparison
+
+```{r}
+data <- rt.all %>%
+  rename(GARD='gard',RT_Dose='TD') %>%
+  select(c(Site,RSI,RT_Dose,GARD)) %>%
+  mutate(Site = recode(Site, breast = "Breast", endometrial = "Endometrium",
+                         breast_TN="TNBC", lung="NSCLC",HN="Head & Neck",
+                         pancreas="Pancreas",glioma="Glioma"))
+
+data<-data %>%
+  pivot_longer(cols = c(GARD,RT_Dose),names_to = "Type",values_to = "Values") %>%
+  mutate(Label = if_else(Type=='GARD','GARD','RT Dose'))
+
+Limits <- unique(data$Site)%>%sort(decreasing = T)
+
+ggplot(data) + 
+  geom_boxplot(aes(x=Values,y=Site, color = Site), outlier.shape = NA) +
+  geom_jitter(aes(x=Values, y=Site,color=Site), height = .15, size=0.8,alpha=.6) +
+  scale_alpha_manual(values=c(.8,.4)) +
+  scale_color_manual(values=q2[c(1,2,8,5,9,4,3,11)]) +
+  scale_fill_manual(values=q2[c(1,2,8,5,9,4,3,11)]) +
+  scale_y_discrete(limits = Limits) +
+  facet_wrap(~Label, nrow = 2) +
+  coord_cartesian(xlim = c(0,100)) +
+  xlab("") + ylab("") +
+  theme_gray() + theme(axis.title = element_blank(), strip.text = element_text(face = "bold"))
+
+```
+
+```{r, fig.width=8, fig.height=8}
+data <- rt.all %>%
+  rename(GARD='gard',RT_Dose='TD') %>%
+  select(c(Site,RSI,RT_Dose,GARD)) %>%
+  mutate(Site = recode(Site, breast = "Breast", endometrial = "Endometrium",
+                         breast_TN="TNBC", lung="NSCLC",HN="Head & Neck",
+                         pancreas="Pancreas",glioma="Glioma")) %>%
+  mutate(Site = factor(Site, levels = c('Breast','TNBC','Endometrium','Glioma','Head & Neck','NSCLC','Pancreas'))) 
+
+dot_plot<-ggplot(data) + 
+  geom_point(aes(x=RT_Dose, y=GARD, color = Site), size=1,
+             position=position_jitterdodge(jitter.width = 1.2, jitter.height = 0)) +
+  scale_x_continuous(limits=c(30,80)) +
+  scale_y_continuous(limits=c(0,100)) +
+  scale_color_manual(values=q) +
+  guides(color=guide_none()) +
+  ylab("GARD") + xlab("RT Dose") +
+  theme_bw()
+
+hist_top <- ggplot(data) + 
+  geom_histogram(aes(x=RT_Dose, fill=Site, after_stat(density))) +
+  theme(legend.title = element_blank(),legend.key.size = unit(10,"pt"),
+        legend.box.margin = margin(t=0,r=0,b=0,l=0,unit="pt"),
+        legend.margin = margin(b=2,t=14,l=0,r=14,unit="pt")) +
+  scale_fill_manual(values=q)
+
+leg <- cowplot::get_legend(hist_top)
+
+hist_top <- ggplot(data) + 
+  geom_histogram(aes(x=RT_Dose, fill=Site, after_stat(density))) +
+  scale_fill_manual(values=q) +
+  scale_x_continuous(limits = c(30,80), position = "top") +
+  ylab("Density") + xlab("") +
+  guides(fill = guide_none())+
+  theme_bw() +
+  theme(axis.ticks.y = element_blank(), axis.text.y = element_blank(),
+        plot.margin = margin(t=8,l=22, r=6, unit = "pt")) 
+
+hist_right <- ggplot(data) + 
+  geom_histogram(aes(y=GARD, fill=Site, after_stat(density))) +
+  scale_fill_manual(values=q) +
+  scale_y_continuous(limits = c(0,100), position = "right") +
+  ylab("") + xlab("") +
+  guides(fill = guide_none())+
+  theme_bw() +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank(),
+        plot.margin = margin(b=16,t=6, unit = "pt")) 
+
+grobs <- list(hist_top,dot_plot,hist_right,leg)
+
+grob_all_outcomes<-arrangeGrob(grobs=grobs,
+           layout_matrix = cbind(c(1,2),c(4,3)),
+             widths=c(4,1),heights=c(1,4))
+
+grid.arrange(grobs=grobs,
+             layout_matrix = cbind(c(1,2),c(4,3)),
+             widths=c(4,1),heights=c(1,4))
+
+```
+
+
