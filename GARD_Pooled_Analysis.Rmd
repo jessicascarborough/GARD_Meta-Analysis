@@ -402,14 +402,16 @@ ggplot(km.os_tbl) +
 
 ```
 
+
+
 # recurrence KM by GARD quintile by site
 
 ```{r plot_recur}
 
 gard_quint_rec <- rt.rec %>%
   group_by(Site) %>%
-  summarise(top_cutoff = quantile(GARD, 0.80),
-            bottom_cutoff = quantile(GARD, 0.20))
+  summarise(top_cutoff = quantile(GARD, 0.90),
+            bottom_cutoff = quantile(GARD, 0.10))
 
 breast_high <- as.numeric(gard_quint_rec[gard_quint_rec$Site=="breast", "top_cutoff"])
 breast_low <-  as.numeric(gard_quint_rec[gard_quint_rec$Site=="breast", "bottom_cutoff"])
@@ -498,6 +500,20 @@ km_data_os_grp <- rt.os %>%
                                 Site == "melanoma" & GARD < melanoma_low ~ "GARD_Low")) %>%
   drop_na(GARD_class)
 
+km_data_os_grp <- rt.os %>%
+  mutate(GARD_class = case_when(Site == "glioma" & GARD > 21 ~ "GARD_High",
+                                Site == "breast_TN" & GARD > 21 ~ "GARD_High",
+                                Site == "endometrial" & GARD > 21 ~ "GARD_High",
+                                Site == "pancreas" & GARD > 21 ~ "GARD_High",
+                                Site == "lung" & GARD > 21 ~ "GARD_High",
+                                Site == "melanoma" & GARD > 21 ~ "GARD_High",
+                                Site == "glioma" & GARD < 21 ~ "GARD_Low",
+                                Site == "breast_TN" & GARD < 21 ~ "GARD_Low",
+                                Site == "endometrial" & GARD < 21 ~ "GARD_Low",
+                                Site == "pancreas" & GARD < 21 ~ "GARD_Low",
+                                Site == "lung" & GARD < 21 ~ "GARD_Low",
+                                Site == "melanoma" & GARD < 21 ~ "GARD_Low")) %>%
+  drop_na(GARD_class)
 
 surv_fit <- survfit(Surv(Time_OS, Event_OS) ~ GARD_class, data = km_data_os_grp)
 
@@ -525,8 +541,13 @@ ggsurvplot(surv_fit, data = km_data_os_grp, size = 1,
 
 gard_quint_rec <- rt.rec %>%
   group_by(Cohort) %>%
-  summarise(top_cutoff = quantile(GARD, 0.80),
-            bottom_cutoff = quantile(GARD, 0.20))
+  summarise(top_cutoff = quantile(GARD, 0.90),
+            bottom_cutoff = quantile(GARD, 0.10))
+
+test <- rt.rec %>% filter(Cohort == "Breast (Karolinksa)")
+range(test$GARD)
+quantile(test$GARD, 0.8)
+quantile(test$GARD, 0.2)
 
 breast_Erasmus_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Erasmus)", "top_cutoff"])
 breast_Erasmus_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Erasmus)", "bottom_cutoff"])
@@ -569,6 +590,27 @@ km_data_rec_grp <- rt.rec %>%
                                 Cohort == "TNBC (NKI)" & GARD < tnbc_NKI_low ~ "GARD_Low")) %>%
   drop_na(GARD_class)
 
+km_data_rec_grp <- rt.rec %>%
+  mutate(GARD_class = case_when(Cohort == "Breast (Erasmus)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Breast (Erasmus)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "Breast (Karolinksa)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Breast (Karolinksa)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "Breast (NKI)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Breast (NKI)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "Endometrium (TCC)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Endometrium (TCC)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "Head & Neck (NKI)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Head & Neck (NKI)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "Melanoma (TCC)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Melanoma (TCC)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "NSCLC (MCC)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "NSCLC (MCC)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "TNBC (MCC)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "TNBC (MCC)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "TNBC (NKI)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "TNBC (NKI)" & GARD < 21 ~ "GARD_Low")) %>%
+  drop_na(GARD_class)
+
 
 surv_fit <- survfit(Surv(Time, Event) ~ GARD_class, data = km_data_rec_grp)
 
@@ -594,8 +636,8 @@ ggsurvplot(surv_fit, data = km_data_rec_grp, size = 1,
 
 gard_quint_os <- rt.os %>%
   group_by(Cohort) %>%
-  summarise(top_cutoff = quantile(GARD, 0.80),
-            bottom_cutoff = quantile(GARD, 0.20))
+  summarise(top_cutoff = quantile(GARD, 0.90),
+            bottom_cutoff = quantile(GARD, 0.10))
 
 
 endometrium_TCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Endometrium (TCC)", "top_cutoff"])

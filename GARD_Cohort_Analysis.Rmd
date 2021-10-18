@@ -1,0 +1,626 @@
+---
+title: "RSI,GARD Cohort-Analysis"
+output:
+  html_document:
+    df_print: paged
+  rmdformats: html_clean
+editor_options:
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo=TRUE, cache=FALSE, prompt=FALSE,
+                      comment=NA,message=FALSE,warning=FALSE)
+
+
+
+```
+
+
+```{r load_packages}
+
+library(gridExtra)
+library(grid)
+library(ggstance)
+library(colorspace)
+library(tidyverse)
+library(dplyr)
+
+library(readxl)
+library(survival)
+library(survminer)
+
+library(rms)
+library(knitr)
+library(rmdformats)
+library(xtable)
+
+library(here)
+
+
+options(xtable.floating = FALSE, xtable.timestamp = "", xtable.comment = FALSE)
+options(max.print="75")
+opts_knit$set(width=75)
+
+
+```
+
+
+# Load Data
+
+```{r load_data}
+rsi.all<-read.csv(file = "Data/data.csv")
+rsi.all$Site<-as.character(rsi.all$Site)
+
+```
+
+
+```{r, include = FALSE}
+
+# load color meta
+
+q <- c("#2980b9","#10ac84","#8e44ad","#7f8c8d","#34495e","#b71c1c",rgb(.9,.55,.2),"#fb8c00","#27ae60","#4f4f4f","#2b2b2b")
+q2 <-        c("#ff5252","#34ace0",   "#33d9b2","#706fd3","#ff793f","#3867d6",  "#808e9b","#f7b731","#2b2b2b")
+names(q2) <- c("Breast", "Endometrium","TNBC", "Pancreas", "Head & Neck","NSCLC", "Glioma","Melanoma","Pooled")
+q3 <- c(
+        # "#ff0011",
+        "#ff5252",
+        "#f071ac", # "#ff526f", #"#ff1414",
+        "#c92c2c",
+        "#34ace0", 
+        "#33d9b2", "#077d61",
+        "#706fd3",
+        "#ff793f",
+        "#3867d6", 
+        "#808e9b",
+        "#f7b731",
+        "#2b2b2b")
+
+names(q3) <- c("Breast (Erasmus)" ,   "Breast (Karolinksa)" , "Breast (NKI)"  ,
+   "Endometrium (TCC)" ,
+   "TNBC (NKI)" ,  "TNBC (MCC)"  ,
+   "Pancreas (TCC)"  ,
+   "Head & Neck (NKI)" ,
+   "NSCLC (MCC)" ,
+   "Glioma (TCGA)" , 
+  "Melanoma (TCC)" ,
+  "Pooled")
+
+```
+
+# Clean data
+
+## Calculate GARD 
+
+```{r calc_GARD}
+rsi.all<-add_column(rsi.all, 'alpha' = NA)
+rsi.all<-add_column(rsi.all, 'GARD'  = NA)
+rsi.all<-rsi.all %>% unite('Source_Site',c(Source,Site), sep="_", remove = F)
+
+
+# sham doses
+rsi.all<-rsi.all %>% 
+  mutate(d = if_else(Received_RT==0, 2, d)) %>%
+  mutate(TD = case_when(
+  Received_RT==0 & Site == 'breast' ~ 50,
+  Received_RT==0 & Site == 'endometrial' ~ 54,
+  Received_RT==0 & Site == 'glioma' ~ 60,
+  Received_RT==0 & Site == 'pancreas' ~ 50,
+  Received_RT==0 & Site == 'melanoma' ~ 60,
+  Received_RT==1 ~ TD
+  )) %>%
+  mutate(n = if_else(Received_RT==0,TD/2,n))
+
+rsi.all <- rsi.all %>%
+  mutate(alpha=log(RSI)/(-2) - 0.05*2) %>%
+  mutate(GARD=n*d*(alpha + 0.05*d))
+
+rsi.all <- rsi.all %>%
+  mutate(alpha.beta = case_when(
+    Site == 'breast' ~ 10,
+    Site == 'endometrial' ~ 10,
+    Site == 'lung' ~ 10,
+    Site == 'glioma' ~ 10,
+    Site == 'pancreas' ~ 10,
+    Site == 'breast_TN' ~ 10,
+    TRUE ~ 10
+  )) %>%
+  mutate(
+    EQD2 = TD*( (d + alpha.beta)/(2 + alpha.beta) )
+  )
+```
+
+
+## Adjust citations, cite, and cohort labels
+```{r add_sources}
+rsi.all<-rsi.all %>% mutate(Source = recode(Source, NKI_wboost='NKI',MCC_wboost='MCC', Pranama="NKI"))
+
+rsi.all<-rsi.all %>% 
+  mutate(Citation = case_when(
+    Site=='endometrial' ~ "Fenstermacher2011",
+    Source=="Karolinksa" ~ "Pawitan2005",
+    Source=='Erasmus' ~ "Wang2005,Yu2007",
+    Site=="pancreas" ~ "Fenstermacher2011",
+    Site=='glioma' ~ "TCGA",
+    Source=='NKI' & (Site=='breast_TN' | Site=='breast') ~ "Servant2012",
+    Source=='MCC' & Site =='breast_TN' ~ "Fenstermacher2011",
+    Site=='melanoma' ~ "Strom2017",
+    Site=="HN" ~ "Pramana2007",
+    Site=="lung" ~ "Fenstermacher2011"
+  ))%>%
+  mutate(Site_corrected = recode(Site, breast='Breast',  breast_TN='TNBC', melanoma='Melanoma',
+                         endometrial='Endometrium', glioma = 'Glioma',
+                         HN='Head & Neck', lung='NSCLC',pancreas='Pancreas')) %>%
+  mutate(Cohort = sprintf("%s (%s)",Site_corrected,Source))
+
+```
+
+
+## Separate groups of interest
+
+```{r sep_groups}
+rt.all <- filter(rsi.all, Received_RT==1)
+  
+rt.rec <- rt.all %>%
+  filter(!is.na(Event)) %>%
+  select(Source_Site, Source, Site, Cohort, Citation,  RSI, GARD, Time, Event, TD, EQD2)
+
+rt.os <- rt.all %>%
+  filter(!is.na(Event_OS)) %>%
+  select(Source_Site, Source, Site, Cohort, Citation,  RSI, GARD, Time_OS, Event_OS, TD, EQD2, MGMT_Expression)
+
+noRT.all <- rsi.all %>% 
+  filter(Received_RT==0)
+  
+noRT.rec <- noRT.all %>%
+  filter(!is.na(Event)) %>%
+  select(Source_Site, Source, Site, Cohort, Citation,  RSI, GARD, Time, Event, TD, EQD2)
+
+noRT.os <- noRT.all %>%
+  filter(!is.na(Event_OS)) %>%
+  select(Source_Site, Source, Site, Cohort, Citation,  RSI, GARD, Time_OS, Event_OS, TD, EQD2, MGMT_Expression)
+
+all.rec <- rsi.all %>%
+  filter(!is.na(Event)) %>%
+  select(Source_Site, Source, Site, Cohort, Citation,  Received_RT, RSI, GARD, Time, Event, TD, EQD2)
+
+all.os <- rsi.all %>% 
+  filter(!is.na(Event_OS)) %>%
+  select(Source_Site, Source, Cohort, Citation,  Site, Received_RT, RSI, GARD, Time_OS, Event_OS, TD, EQD2, MGMT_Expression)
+```
+
+
+# Data Visualization
+
+## GARD distribution between cohorts
+
+### Recurrence Cohorts
+
+```{r violin_GARD_rec}
+
+ggplot(rt.rec, aes(x = GARD, y = Cohort,fill = Cohort)) + 
+  geom_violin(color = "black") + 
+  geom_boxplot(fill = "white", width = 0.15) +
+  ggtitle("Distribution of GARD by Recurrence Cohorts")
+  
+
+```
+
+### Survival Cohorts
+
+
+```{r violin_GARD_OS}
+
+ggplot(rt.os, aes(x = GARD, y = Cohort,fill = Cohort)) + 
+  geom_violin(color = "black") + 
+  geom_boxplot(fill = "white", width = 0.15) +
+  ggtitle("Distribution of GARD by OS Cohorts")
+
+```
+
+## KM with all cohorts
+
+We'll start with previous code written by Geoffrey Sedor. 
+
+### Recurrence
+
+```{r, fig.align="center"}
+km.df <- all.rec 
+km.rec <- survfit(Surv(Time,Event)~ Cohort + Received_RT, data = km.df)
+
+for (i in 1:length(km.rec$strata)) {
+  cur_strata = names(km.rec$strata[i])
+  count = unname(km.rec$strata[i])
+  c <- c(rep(cur_strata,count))
+  if (i==1){
+    c_all.rec <- c
+  } else {
+    c_all.rec <- c(c_all.rec,c)
+  }
+}
+
+km.rec_tbl <- bind_cols(time=km.rec$time, n.risk=km.rec$n.risk, 
+                    event=km.rec$n.event, censor=km.rec$n.censor, 
+                    surv=km.rec$surv, std.err=km.rec$std.err)
+
+km.rec_tbl$strata <- c_all.rec
+km.rec_tbl <- km.rec_tbl %>%
+  separate(col = strata, into = c("Cohort", "Received_RT"),sep = ", ")%>%
+  mutate(Cohort = sub(pattern = "Cohort=",replacement = "", x=Cohort)) %>%
+  mutate(Received_RT = sub(pattern = "Received_RT=",replacement = "", x=Received_RT)) %>%
+  # mutate(Site = recode(Site, breast="Breast",breast_TN="TNBC", melanoma="Melanoma",
+  #                      endometrial="Endometrium", HN="Head & Neck",lung="NSCLC")) %>%
+  mutate(Outcome = "Recurrence") %>%
+  mutate(Received_RT = if_else(Received_RT==0,"-RT","+RT"))
+
+cohorts <- unique(km.rec_tbl$Cohort)
+
+km.rec_tbl <- km.rec_tbl %>% mutate(Site = case_when(
+  grepl("Breast", Cohort) ~ "Breast",
+  grepl("Endo", Cohort) ~ "Endometrium",
+  grepl("Glioma", Cohort) ~ "Glioma",
+  grepl("Head", Cohort) ~ "Head & Neck",
+  grepl("Mel", Cohort) ~ "Melanoma",
+  grepl("NSCLC", Cohort) ~ "NSCLC",
+  grepl("Pancreas", Cohort) ~ "Pancreas",
+  grepl("TNBC", Cohort) ~ "TNBC",
+  Cohort == "Pooled" ~ "Pooled"
+))
+
+km.rec_tbl<- bind_rows(km.rec_tbl,
+          tibble(expand_grid(Cohort=cohorts,Received_RT = c("-RT","+RT")),surv=1,time=0) )
+
+
+ggplot(km.rec_tbl) + 
+  geom_step(aes(x=time,y=surv,
+                # color=Site,
+                color=Cohort,
+                group=interaction(Cohort,Received_RT),
+                linetype=Received_RT
+                )) + 
+  scale_x_continuous(expand=expansion(mult=0.01,add=0)) +
+  scale_y_continuous(expand=expansion(mult=0.01,add=0)) +
+  scale_color_manual(values=q3[unique(km.rec_tbl$Cohort)]) +
+  scale_linetype_manual(values = c('42',"solid")) +
+  # guides(color=guide_legend(reverse = TRUE)) +
+  facet_grid(.~Received_RT) +
+  xlab("Years From Diagnosis") + ylab("Recurrence-Free Proportion") + 
+  theme_bw() + 
+  theme(plot.title = element_text(face="bold",size=10,hjust = .5),
+        legend.key.width = unit(22,units = "pt"),
+        panel.spacing.x = unit(18,"pt")) +
+  guides(color = guide_legend(order=1,reverse = F),
+  Received_RT = guide_legend(order=2, reverse = T)) +
+  coord_cartesian(xlim = c(0,10), ylim = c(0,1)) + ggtitle("KM: First Recurrence")
+
+```
+
+An now let's first confirm that our method of plotting KM produces the same results as the previous code. We can see that although the visualization styles are different the data appear the same for RT+ cohorts. 
+
+```{r redo_above_recur}
+
+surv_fit <- survfit(Surv(Time, Event) ~ Cohort, data = rt.rec)
+
+ggsurvplot(surv_fit, data = rt.rec, size = 1,
+           conf.int = FALSE, # Add confidence interval
+           pval = TRUE, # Add p-value
+           risk.table = FALSE, # Add risk table
+           risk.table.height = 0.45, # change if you have >2 groups
+           risk.table.y.text.col = T, # show colors in table listing
+           ncensor.plot = FALSE,
+           xlab = "Time in months", # adjust X axis label
+           # break.time.by = 12, # break X axis in time intervals
+           ggtheme = theme_bw(), # Change ggplot2 theme
+           title = "KM: Recurrence between cohorts")
+
+```
+
+
+### Survival
+
+```{r, fig.align="center"}
+km.df <- all.os
+km.os<- survfit(Surv(Time_OS,Event_OS)~ Cohort + Received_RT, data = km.df)
+
+for (i in 1:length(km.os$strata)) {
+  cur_strata = names(km.os$strata[i])
+  count = unname(km.os$strata[i])
+  c <- c(rep(cur_strata,count))
+  if (i==1){
+    c_all <- c
+  } else {
+    c_all <- c(c_all,c)
+  }
+}
+km.os_tbl <- bind_cols(time=km.os$time, n.risk=km.os$n.risk, 
+                    event=km.os$n.event, censor=km.os$n.censor, 
+                    surv=km.os$surv, std.err=km.os$std.err)
+km.os_tbl$strata = c_all
+km.os_tbl <- km.os_tbl %>%
+  separate(col = strata, into = c("Cohort", "Received_RT"),sep = ", ")%>%
+  mutate(Cohort = sub(pattern = "Cohort=",replacement = "", x=Cohort)) %>%
+  mutate(Received_RT = sub(pattern = "Received_RT=",replacement = "", x=Received_RT)) %>%
+  mutate(Outcome = "Survival") %>%
+  mutate(Received_RT = if_else(Received_RT==0,"-RT","+RT")) 
+
+cohorts <- unique(km.os_tbl$Cohort)
+
+km.os_tbl <- km.os_tbl %>% mutate(Site = case_when(
+  grepl("Breast", Cohort) ~ "Breast",
+  grepl("Endo", Cohort) ~ "Endometrium",
+  grepl("Glioma", Cohort) ~ "Glioma",
+  grepl("Head", Cohort) ~ "Head & Neck",
+  grepl("Mel", Cohort) ~ "Melanoma",
+  grepl("NSCLC", Cohort) ~ "NSCLC",
+  grepl("Pancreas", Cohort) ~ "Pancreas",
+  grepl("TNBC", Cohort) ~ "TNBC",
+  Cohort == "Pooled" ~ "Pooled"
+))
+
+km.os_tbl<- bind_rows(km.os_tbl,
+          tibble(expand_grid(Cohort=cohorts,Received_RT = c("-RT","+RT")),surv=1,time=0) )
+
+ggplot(km.os_tbl) + 
+  geom_step(aes(x=time,y=surv,
+                group=interaction(Cohort,Received_RT),
+                color=Cohort, 
+                linetype=Received_RT)) + 
+  # geom_point(data=filter(km_tbl, censor=="1"), 
+  #            aes(x=time,y=surv,color=Site), shape=3, size=.4) +
+  scale_x_continuous(expand=expansion(mult=0,add=0), limits=c(0,10)) +
+  scale_y_continuous(expand=expansion(mult=0.01,add=0), limits=c(0,1)) +
+  scale_color_manual(values=q3[unique(km.os_tbl$Cohort)]) +
+  scale_linetype_manual(values = c('42',"solid")) +
+   facet_grid(.~Received_RT) +
+  guides(color=guide_legend(reverse = TRUE)) +
+  xlab("Years From Diagnosis") + ylab("Overall Survival") + 
+  theme_bw() + 
+  theme(plot.title = element_text(face="bold",size=10,hjust = .5), 
+        legend.key.width = unit(22,units = "pt"),
+        panel.spacing.x = unit(18,"pt")
+        ) +
+  guides(color = guide_legend(order=1,reverse = F),
+         Received_RT = guide_legend(order=2)) + 
+  ggtitle("KM: Survival")
+
+```
+
+Again, we see that our new plotting method produces a similar plot comparing the RT+ groups. 
+```{r redo_above_os}
+
+surv_fit <- survfit(Surv(Time_OS, Event_OS) ~ Cohort, data = rt.os)
+
+ggsurvplot(surv_fit, data = rt.os, size = 1,
+           conf.int = FALSE, # Add confidence interval
+           pval = TRUE, # Add p-value
+           risk.table = FALSE, # Add risk table
+           risk.table.height = 0.45, # change if you have >2 groups
+           risk.table.y.text.col = T, # show colors in table listing
+           ncensor.plot = FALSE,
+           xlab = "Time in months", # adjust X axis label
+           # break.time.by = 12, # break X axis in time intervals
+           ggtheme = theme_bw(), # Change ggplot2 theme
+           title = "KM: Recurrence between cohorts")
+
+
+```
+
+
+## KM between cohorts
+
+### Recurrence
+
+First, we'll clean the data to label patients in the top/bottom cohorts. In this instance, we're going to look at the 1st and 5th quintiles. 
+
+```{r plot_recur_cohort}
+
+gard_quint_rec <- rt.rec %>%
+  group_by(Cohort) %>%
+  summarise(top_cutoff = quantile(GARD, 0.80),
+            bottom_cutoff = quantile(GARD, 0.20),
+            median_cutoff = median(GARD))
+
+# sanity check
+test <- rt.rec %>% filter(Cohort == "Breast (Karolinksa)")
+range(test$GARD)
+as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Karolinksa)", "top_cutoff"])
+quantile(test$GARD, 0.8)
+as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Karolinksa)", "bottom_cutoff"])
+quantile(test$GARD, 0.2)
+
+
+# extract values for GARD_class cutoffs
+breast_Erasmus_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Erasmus)", "top_cutoff"])
+breast_Erasmus_median <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Erasmus)", "median_cutoff"])
+breast_Erasmus_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Erasmus)", "bottom_cutoff"])
+
+breast_Karolinksa_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Karolinksa)", "top_cutoff"])
+breast_Karolinksa_median <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Karolinksa)", "median_cutoff"])
+breast_Karolinksa_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Karolinksa)", "bottom_cutoff"])
+
+breast_NKI_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (NKI)", "top_cutoff"])
+breast_NKI_median <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (NKI)", "median_cutoff"])
+breast_NKI_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (NKI)", "bottom_cutoff"])
+
+endometrium_TCC_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Endometrium (TCC)", "top_cutoff"])
+endometrium_TCC_median <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Endometrium (TCC)", "median_cutoff"])
+endometrium_TCC_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Endometrium (TCC)", "bottom_cutoff"])
+
+hn_NKI_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Head & Neck (NKI)", "top_cutoff"])
+hn_NKI_median <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Head & Neck (NKI)", "median_cutoff"])
+hn_NKI_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Head & Neck (NKI)", "bottom_cutoff"])
+
+melanoma_TCC_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Melanoma (TCC)", "top_cutoff"])
+melanoma_TCC_median <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Melanoma (TCC)", "median_cutoff"])
+melanoma_TCC_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Melanoma (TCC)", "bottom_cutoff"])
+
+nsclc_MCC_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="NSCLC (MCC)", "top_cutoff"])
+nsclc_MCC_median <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="NSCLC (MCC)", "median_cutoff"])
+nsclc_MCC_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="NSCLC (MCC)", "bottom_cutoff"])
+
+tnbc_MCC_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="TNBC (MCC)", "top_cutoff"])
+tnbc_MCC_median <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="TNBC (MCC)", "median_cutoff"])
+tnbc_MCC_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="TNBC (MCC)", "bottom_cutoff"])
+
+tnbc_NKI_high <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="TNBC (NKI)", "top_cutoff"])
+tnbc_NKI_median <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="TNBC (NKI)", "median_cutoff"])
+tnbc_NKI_low <- as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="TNBC (NKI)", "bottom_cutoff"])
+
+
+# assign class based on cutoffs
+km_data_rec_grp <- rt.rec %>%
+  mutate(GARD_class = case_when(Cohort == "Breast (Erasmus)" & GARD > breast_Erasmus_high ~ "GARD_High",
+                                Cohort == "Breast (Erasmus)" & GARD < breast_Erasmus_low ~ "GARD_Low",
+                                Cohort == "Breast (Karolinksa)" & GARD > breast_Karolinksa_high ~ "GARD_High",
+                                Cohort == "Breast (Karolinksa)" & GARD < breast_Karolinksa_low ~ "GARD_Low",
+                                Cohort == "Breast (NKI)" & GARD > breast_NKI_high ~ "GARD_High",
+                                Cohort == "Breast (NKI)" & GARD < breast_NKI_low ~ "GARD_Low",
+                                Cohort == "Endometrium (TCC)" & GARD > endometrium_TCC_high ~ "GARD_High",
+                                Cohort == "Endometrium (TCC)" & GARD < endometrium_TCC_low ~ "GARD_Low",
+                                Cohort == "Head & Neck (NKI)" & GARD > hn_NKI_high ~ "GARD_High",
+                                Cohort == "Head & Neck (NKI)" & GARD < hn_NKI_low ~ "GARD_Low",
+                                Cohort == "Melanoma (TCC)" & GARD > melanoma_TCC_high ~ "GARD_High",
+                                Cohort == "Melanoma (TCC)" & GARD < melanoma_TCC_low ~ "GARD_Low",
+                                Cohort == "NSCLC (MCC)" & GARD > nsclc_MCC_high ~ "GARD_High",
+                                Cohort == "NSCLC (MCC)" & GARD < nsclc_MCC_low ~ "GARD_Low",
+                                Cohort == "TNBC (MCC)" & GARD > tnbc_MCC_high ~ "GARD_High",
+                                Cohort == "TNBC (MCC)" & GARD < tnbc_MCC_low ~ "GARD_Low",
+                                Cohort == "TNBC (NKI)" & GARD > tnbc_NKI_high ~ "GARD_High",
+                                Cohort == "TNBC (NKI)" & GARD < tnbc_NKI_low ~ "GARD_Low")) %>%
+  drop_na(GARD_class)
+
+# test single cutoff value
+km_data_rec_grp <- rt.rec %>%
+  mutate(GARD_class = case_when(Cohort == "Breast (Erasmus)" & GARD >= breast_Erasmus_median ~ "GARD_High",
+                                Cohort == "Breast (Erasmus)" & GARD < breast_Erasmus_median ~ "GARD_Low",
+                                Cohort == "Breast (Karolinksa)" & GARD >= breast_Karolinksa_median ~ "GARD_High",
+                                Cohort == "Breast (Karolinksa)" & GARD < breast_Karolinksa_median ~ "GARD_Low",
+                                Cohort == "Breast (NKI)" & GARD >= breast_NKI_median ~ "GARD_High",
+                                Cohort == "Breast (NKI)" & GARD < breast_NKI_median ~ "GARD_Low",
+                                Cohort == "Endometrium (TCC)" & GARD >= endometrium_TCC_median ~ "GARD_High",
+                                Cohort == "Endometrium (TCC)" & GARD < endometrium_TCC_median ~ "GARD_Low",
+                                Cohort == "Head & Neck (NKI)" & GARD >= hn_NKI_median ~ "GARD_High",
+                                Cohort == "Head & Neck (NKI)" & GARD < hn_NKI_median ~ "GARD_Low",
+                                Cohort == "Melanoma (TCC)" & GARD >= melanoma_TCC_median ~ "GARD_High",
+                                Cohort == "Melanoma (TCC)" & GARD < melanoma_TCC_median ~ "GARD_Low",
+                                Cohort == "NSCLC (MCC)" & GARD >= nsclc_MCC_median ~ "GARD_High",
+                                Cohort == "NSCLC (MCC)" & GARD < nsclc_MCC_median ~ "GARD_Low",
+                                Cohort == "TNBC (MCC)" & GARD >= tnbc_MCC_median ~ "GARD_High",
+                                Cohort == "TNBC (MCC)" & GARD < tnbc_MCC_median ~ "GARD_Low",
+                                Cohort == "TNBC (NKI)" & GARD >= tnbc_NKI_median ~ "GARD_High",
+                                Cohort == "TNBC (NKI)" & GARD < tnbc_NKI_median ~ "GARD_Low")) %>%
+  drop_na(GARD_class)
+
+```
+
+
+Now, we'll fit our survival model and compare between cohorts. 
+```{r fit_recur_cohort_KM}
+
+surv_fit <- survfit(Surv(Time, Event) ~ GARD_class, data = km_data_rec_grp)
+
+ggsurvplot(surv_fit, data = km_data_rec_grp, size = 1,
+           conf.int = FALSE, # Add confidence interval
+           pval = TRUE, # Add p-value
+           risk.table = FALSE, # Add risk table
+           risk.table.height = 0.45, # change if you have >2 groups
+           risk.table.y.text.col = T, # show colors in table listing
+           ncensor.plot = FALSE,
+           facet.by = c("Cohort"),
+           xlab = "Time in months", # adjust X axis label
+           # break.time.by = 12, # break X axis in time intervals
+           ggtheme = theme_bw(), # Change ggplot2 theme
+           title = "KM: Recurrence between cohorts separated by cutoff of 21")
+
+
+```
+
+### Survival
+
+And, here, we'll repeat the above with OS instead of first recurrence as the event of interest. 
+```{r class_os_KM}
+
+gard_quint_os <- rt.os %>%
+  group_by(Cohort) %>%
+  summarise(top_cutoff = quantile(GARD, 0.80),
+            bottom_cutoff = quantile(GARD, 0.20))
+
+
+# sanity check
+test <- rt.os %>% filter(Cohort == "Glioma (TCGA)")
+range(test$GARD)
+as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "top_cutoff"])
+quantile(test$GARD, 0.8)
+as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "bottom_cutoff"])
+quantile(test$GARD, 0.2)
+
+# extract values for GARD_class cutoffs
+endometrium_TCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Endometrium (TCC)", "top_cutoff"])
+endometrium_TCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Endometrium (TCC)", "bottom_cutoff"])
+glioma_TCGA_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "top_cutoff"])
+glioma_TCGA_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "bottom_cutoff"])
+melanoma_TCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Melanoma (TCC)", "top_cutoff"])
+melanoma_TCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Melanoma (TCC)", "bottom_cutoff"])
+nsclc_MCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="NSCLC (MCC)", "top_cutoff"])
+nsclc_MCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="NSCLC (MCC)", "bottom_cutoff"])
+pancreas_TCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Pancreas (TCC)", "top_cutoff"])
+pancreas_TCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Pancreas (TCC)", "bottom_cutoff"])
+tnbc_MCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="TNBC (MCC)", "top_cutoff"])
+tnbc_MCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="TNBC (MCC)", "bottom_cutoff"])
+
+
+# assign class based on cutoffs
+km_data_os_grp <- rt.os %>%
+  mutate(GARD_class = case_when(Cohort == "Endometrium (TCC)" & GARD > endometrium_TCC_high ~ "GARD_High",
+                                Cohort == "Endometrium (TCC)" & GARD < endometrium_TCC_low ~ "GARD_Low",
+                                Cohort == "Glioma (TCGA)" & GARD > glioma_TCGA_high ~ "GARD_High",
+                                Cohort == "Glioma (TCGA)" & GARD < glioma_TCGA_low ~ "GARD_Low",
+                                Cohort == "Melanoma (TCC)" & GARD > melanoma_TCC_high ~ "GARD_High",
+                                Cohort == "Melanoma (TCC)" & GARD < melanoma_TCC_low ~ "GARD_Low",
+                                Cohort == "NSCLC (MCC)" & GARD > nsclc_MCC_high ~ "GARD_High",
+                                Cohort == "NSCLC (MCC)" & GARD < nsclc_MCC_low ~ "GARD_Low",
+                                Cohort == "Pancreas (TCC)" & GARD > pancreas_TCC_high ~ "GARD_High",
+                                Cohort == "Pancreas (TCC)" & GARD < pancreas_TCC_low ~ "GARD_Low",
+                                Cohort == "TNBC (MCC)" & GARD > tnbc_MCC_high ~ "GARD_High",
+                                Cohort == "TNBC (MCC)" & GARD < tnbc_MCC_low ~ "GARD_Low")) %>%
+  drop_na(GARD_class)
+
+
+# test based on predefined cutoff value 
+
+km_data_os_grp <- rt.os %>%
+  mutate(GARD_class = case_when(Cohort == "Endometrium (TCC)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Endometrium (TCC)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "Glioma (TCGA)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Glioma (TCGA)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "Melanoma (TCC)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Melanoma (TCC)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "NSCLC (MCC)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "NSCLC (MCC)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "Pancreas (TCC)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "Pancreas (TCC)" & GARD < 21 ~ "GARD_Low",
+                                Cohort == "TNBC (MCC)" & GARD > 21 ~ "GARD_High",
+                                Cohort == "TNBC (MCC)" & GARD < 21 ~ "GARD_Low")) %>%
+  drop_na(GARD_class)
+
+```
+
+
+```{r fit_OS_cohort_km}
+surv_fit <- survfit(Surv(Time_OS, Event_OS) ~ GARD_class, data = km_data_os_grp)
+
+ggsurvplot(surv_fit, data = km_data_os_grp, size = 1,
+           conf.int = FALSE, # Add confidence interval
+           pval = TRUE, # Add p-value
+           risk.table = FALSE, # Add risk table
+           risk.table.height = 0.45, # change if you have >2 groups
+           risk.table.y.text.col = T, # show colors in table listing
+           ncensor.plot = FALSE,
+           facet.by = c("Cohort"),
+           xlab = "Time in months", # adjust X axis label
+           # break.time.by = 12, # break X axis in time intervals
+           ggtheme = theme_bw(), # Change ggplot2 theme
+           title = "KM: Overall Survival between cohorts separated by cutoff of 21")
+```
