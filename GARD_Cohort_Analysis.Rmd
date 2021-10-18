@@ -423,12 +423,12 @@ gard_quint_rec <- rt.rec %>%
             median_cutoff = median(GARD))
 
 # sanity check
-test <- rt.rec %>% filter(Cohort == "Breast (Karolinksa)")
-range(test$GARD)
-as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Karolinksa)", "top_cutoff"])
-quantile(test$GARD, 0.8)
-as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Karolinksa)", "bottom_cutoff"])
-quantile(test$GARD, 0.2)
+# test <- rt.rec %>% filter(Cohort == "Breast (Karolinksa)")
+# range(test$GARD)
+# as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Karolinksa)", "top_cutoff"])
+# quantile(test$GARD, 0.8)
+# as.numeric(gard_quint_rec[gard_quint_rec$Cohort=="Breast (Karolinksa)", "bottom_cutoff"])
+# quantile(test$GARD, 0.2)
 
 
 # extract values for GARD_class cutoffs
@@ -532,7 +532,7 @@ ggsurvplot(surv_fit, data = km_data_rec_grp, size = 1,
            xlab = "Time in months", # adjust X axis label
            # break.time.by = 12, # break X axis in time intervals
            ggtheme = theme_bw(), # Change ggplot2 theme
-           title = "KM: Recurrence between cohorts separated by cutoff of 21")
+           title = "KM: Recurrence between cohorts separated by median cutoff")
 
 
 ```
@@ -545,29 +545,41 @@ And, here, we'll repeat the above with OS instead of first recurrence as the eve
 gard_quint_os <- rt.os %>%
   group_by(Cohort) %>%
   summarise(top_cutoff = quantile(GARD, 0.80),
-            bottom_cutoff = quantile(GARD, 0.20))
+            bottom_cutoff = quantile(GARD, 0.20),
+            median_cutoff = median(GARD))
 
 
 # sanity check
-test <- rt.os %>% filter(Cohort == "Glioma (TCGA)")
-range(test$GARD)
-as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "top_cutoff"])
-quantile(test$GARD, 0.8)
-as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "bottom_cutoff"])
-quantile(test$GARD, 0.2)
+# test <- rt.os %>% filter(Cohort == "Glioma (TCGA)")
+# range(test$GARD)
+# as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "top_cutoff"])
+# quantile(test$GARD, 0.8)
+# as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "bottom_cutoff"])
+# quantile(test$GARD, 0.2)
 
 # extract values for GARD_class cutoffs
 endometrium_TCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Endometrium (TCC)", "top_cutoff"])
+endometrium_TCC_median <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Endometrium (TCC)", "median_cutoff"])
 endometrium_TCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Endometrium (TCC)", "bottom_cutoff"])
+
 glioma_TCGA_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "top_cutoff"])
+glioma_TCGA_median <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "median_cutoff"])
 glioma_TCGA_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Glioma (TCGA)", "bottom_cutoff"])
+
 melanoma_TCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Melanoma (TCC)", "top_cutoff"])
+melanoma_TCC_median <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Melanoma (TCC)", "median_cutoff"])
 melanoma_TCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Melanoma (TCC)", "bottom_cutoff"])
+
 nsclc_MCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="NSCLC (MCC)", "top_cutoff"])
+nsclc_MCC_median <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="NSCLC (MCC)", "median_cutoff"])
 nsclc_MCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="NSCLC (MCC)", "bottom_cutoff"])
+
 pancreas_TCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Pancreas (TCC)", "top_cutoff"])
+pancreas_TCC_median <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Pancreas (TCC)", "median_cutoff"])
 pancreas_TCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="Pancreas (TCC)", "bottom_cutoff"])
+
 tnbc_MCC_high <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="TNBC (MCC)", "top_cutoff"])
+tnbc_MCC_median <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="TNBC (MCC)", "median_cutoff"])
 tnbc_MCC_low <- as.numeric(gard_quint_os[gard_quint_os$Cohort=="TNBC (MCC)", "bottom_cutoff"])
 
 
@@ -591,18 +603,18 @@ km_data_os_grp <- rt.os %>%
 # test based on predefined cutoff value 
 
 km_data_os_grp <- rt.os %>%
-  mutate(GARD_class = case_when(Cohort == "Endometrium (TCC)" & GARD > 21 ~ "GARD_High",
-                                Cohort == "Endometrium (TCC)" & GARD < 21 ~ "GARD_Low",
-                                Cohort == "Glioma (TCGA)" & GARD > 21 ~ "GARD_High",
-                                Cohort == "Glioma (TCGA)" & GARD < 21 ~ "GARD_Low",
-                                Cohort == "Melanoma (TCC)" & GARD > 21 ~ "GARD_High",
-                                Cohort == "Melanoma (TCC)" & GARD < 21 ~ "GARD_Low",
-                                Cohort == "NSCLC (MCC)" & GARD > 21 ~ "GARD_High",
-                                Cohort == "NSCLC (MCC)" & GARD < 21 ~ "GARD_Low",
-                                Cohort == "Pancreas (TCC)" & GARD > 21 ~ "GARD_High",
-                                Cohort == "Pancreas (TCC)" & GARD < 21 ~ "GARD_Low",
-                                Cohort == "TNBC (MCC)" & GARD > 21 ~ "GARD_High",
-                                Cohort == "TNBC (MCC)" & GARD < 21 ~ "GARD_Low")) %>%
+  mutate(GARD_class = case_when(Cohort == "Endometrium (TCC)" & GARD >= endometrium_TCC_median ~ "GARD_High",
+                                Cohort == "Endometrium (TCC)" & GARD < endometrium_TCC_median ~ "GARD_Low",
+                                Cohort == "Glioma (TCGA)" & GARD >= glioma_TCGA_median ~ "GARD_High",
+                                Cohort == "Glioma (TCGA)" & GARD < glioma_TCGA_median ~ "GARD_Low",
+                                Cohort == "Melanoma (TCC)" & GARD >= melanoma_TCC_median ~ "GARD_High",
+                                Cohort == "Melanoma (TCC)" & GARD < melanoma_TCC_median ~ "GARD_Low",
+                                Cohort == "NSCLC (MCC)" & GARD >= nsclc_MCC_median ~ "GARD_High",
+                                Cohort == "NSCLC (MCC)" & GARD < nsclc_MCC_median ~ "GARD_Low",
+                                Cohort == "Pancreas (TCC)" & GARD >= pancreas_TCC_median ~ "GARD_High",
+                                Cohort == "Pancreas (TCC)" & GARD < pancreas_TCC_median ~ "GARD_Low",
+                                Cohort == "TNBC (MCC)" & GARD >= tnbc_MCC_median ~ "GARD_High",
+                                Cohort == "TNBC (MCC)" & GARD < tnbc_MCC_median ~ "GARD_Low")) %>%
   drop_na(GARD_class)
 
 ```
@@ -622,5 +634,5 @@ ggsurvplot(surv_fit, data = km_data_os_grp, size = 1,
            xlab = "Time in months", # adjust X axis label
            # break.time.by = 12, # break X axis in time intervals
            ggtheme = theme_bw(), # Change ggplot2 theme
-           title = "KM: Overall Survival between cohorts separated by cutoff of 21")
+           title = "KM: Overall Survival between cohorts separated by median cutoff")
 ```
